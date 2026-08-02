@@ -1,0 +1,269 @@
+"""Хендлеры: команды, приём фото, инлайн-кнопки, режим съёмки."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from aiogram import F, Router
+from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import Command, CommandStart
+from aiogram.types import CallbackQuery, Message, User
+
+import keyboards
+import rating
+import texts
+from access import DemoState, SubscriptionGate
+from config import Config
+from database import BaseDatabase as Database
+from rating import generate_report
+
+router = Router(name="looksmax")
+
+def display_name(user: User | None) -> str:
+    if user is None:
+        return "аноним"
+    if user.username:
+        return f"@{user.username}"
+    return user.full_name or "аноним"
+
+
+# ────────────────────────────── команды ────────────────────────────────────
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, db: Database, config: Config) -> None:
+    user = message.from_user
+    if user is not None:
+        await db.ensure_user(user.id)
+    name = user.first_name if user and user.first_name else "друг"
+    await message.answer(
+        texts.start(name), reply_markup=keyboards.main_menu(config.webapp_url)
+    )
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await message.answer(texts.HELP, reply_markup=keyboards.back_menu())
+
+
+@router.message(Command("about"))
+async def cmd_about(message: Message) -> None:
+    await message.answer(texts.ABOUT, reply_markup=keyboards.back_menu())
+
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message, db: Database) -> None:
+    await _send_stats(message, db, message.from_user)
+
+
+@router.message(Command("myid"))
+async def cmd_myid(message: Message) -> None:
+    if message.from_user is not None:
+        await message.answer(texts.whoami(message.from_user.id))
+
+
+@router.message(Command("demo_off"))
+async def cmd_demo_off(message: Message, demo: DemoState) -> None:
+    user = message.from_user
+    if user is None:
+        return
+    if not await demo.is_active(user.id):
+        await message.answer(texts.DEMO_NOT_ACTIVE)
+        return
+    await demo.disable(user.id)
+    await message.answer(texts.DEMO_OFF)
+
+
+# ──────────────────────────────── фото ─────────────────────────────────────
+
+
+@router.message(F.photo)
+async def handle_photo(
+    message: Message, db: Database, config: Config, demo: DemoState
+) -> None:
+    # Дедуп альбомов через базу: на serverless память между вызовами
+    # функции не сохраняется, а пачка фото приходит разными апдейтами.
+    if message.media_group_id and not await db.claim_album(message.media_group_id):
+        return
+
+    user = message.from_user
+    if user is None:
+        return
+
+    photo_id = message.photo[-1].file_unique_id
+    in_demo = await demo.is_active(user.id)
+    profile = rating.DEMO if in_demo else rating.NORMAL
+
+    # Фото сознательно НЕ скачивается: отчёт строится детерминированно
+    # по идентификатору файла, само изображение боту не нужно.
+    report = generate_report(user.id, photo_id, config.score_salt, profile)
+
+    with contextlib.suppress(TelegramAPIError):
+        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+
+    label, percent = texts.SCAN_STAGES[0]
+    status = await message.answer(texts.scan_frame(label, percent))
+
+    for label, percent in texts.SCAN_STAGES[1:]:
+        await asyncio.sleep(config.scan_delay)
+        with contextlib.suppress(TelegramBadRequest):
+            await status.edit_text(texts.scan_frame(label, percent))
+
+    await asyncio.sleep(config.scan_delay)
+
+    card = texts.report_card(report, display_name(user), show_header=not in_demo)
+    markup = keyboards.report_menu(photo_id, in_demo, config.webapp_url)
+    try:
+        await status.edit_text(card, reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer(card, reply_markup=markup)
+
+    # Демо-оценки не попадают ни в статистику, ни в топ.
+    if not in_demo:
+        await db.save_rating(user.id, report.report_id, report.overall)
+
+
+@router.message(F.document)
+async def handle_document(message: Message) -> None:
+    mime = (message.document.mime_type or "") if message.document else ""
+    if mime.startswith("image/"):
+        await message.answer(texts.DOC_AS_PHOTO)
+    else:
+        await message.answer(texts.NEED_PHOTO)
+
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def handle_text(message: Message, config: Config, demo: DemoState) -> None:
+    text = (message.text or "").strip()
+
+    if config.demo_code and text == config.demo_code:
+        await _toggle_demo(message, config, demo)
+        return
+
+    await message.answer(
+        texts.NEED_PHOTO, reply_markup=keyboards.main_menu(config.webapp_url)
+    )
+
+
+@router.message()
+async def handle_other(message: Message) -> None:
+    await message.answer(texts.NEED_PHOTO)
+
+
+# ─────────────────────────────── колбэки ───────────────────────────────────
+
+
+@router.callback_query(F.data == keyboards.CHECK_SUB)
+async def cb_check_sub(
+    callback: CallbackQuery, gate: SubscriptionGate, config: Config
+) -> None:
+    user = callback.from_user
+    if user is None or callback.message is None:
+        await callback.answer()
+        return
+
+    gate.forget(user.id)
+
+    if await gate.is_member(callback.bot, user.id):
+        await callback.answer("Доступ открыт", show_alert=False)
+        await callback.message.answer(
+            texts.GATE_PASSED, reply_markup=keyboards.main_menu(config.webapp_url)
+        )
+    else:
+        await callback.answer(texts.GATE_FAILED, show_alert=True)
+
+
+@router.callback_query(F.data.startswith(keyboards.DETAILS_PREFIX))
+async def cb_details(
+    callback: CallbackQuery, config: Config, demo: DemoState
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.data is None or callback.from_user is None:
+        return
+
+    photo_id = callback.data[len(keyboards.DETAILS_PREFIX) :]
+    in_demo = await demo.is_active(callback.from_user.id)
+    profile = rating.DEMO if in_demo else rating.NORMAL
+
+    report = generate_report(
+        callback.from_user.id, photo_id, config.score_salt, profile
+    )
+
+    await callback.message.answer(
+        texts.report_details(report, config.score_salt, show_header=not in_demo),
+        reply_markup=keyboards.back_menu() if in_demo else keyboards.details_menu(),
+    )
+
+
+@router.callback_query(F.data == "stats")
+async def cb_stats(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await _send_stats(callback.message, db, callback.from_user)
+
+
+@router.callback_query(F.data == "about")
+async def cb_about(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(texts.ABOUT, reply_markup=keyboards.back_menu())
+
+
+@router.callback_query(F.data == "howto")
+async def cb_howto(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(texts.HELP, reply_markup=keyboards.back_menu())
+
+
+@router.callback_query(F.data == "menu")
+async def cb_menu(callback: CallbackQuery, config: Config) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    name = (callback.from_user.first_name if callback.from_user else None) or "друг"
+    await callback.message.answer(
+        texts.start(name), reply_markup=keyboards.main_menu(config.webapp_url)
+    )
+
+
+# ─────────────────────────────── хелперы ───────────────────────────────────
+
+
+async def _toggle_demo(message: Message, config: Config, demo: DemoState) -> None:
+    user = message.from_user
+    if user is None:
+        return
+
+    # Убираем код из чата — чтобы он не попал в кадр при записи экрана.
+    with contextlib.suppress(TelegramAPIError):
+        await message.delete()
+
+    if not config.demo_allowed_for(user.id):
+        await message.answer(texts.DEMO_DENIED)
+        return
+
+    if await demo.is_active(user.id):
+        await message.answer(texts.demo_still_on(await demo.minutes_left(user.id)))
+        return
+
+    minutes = await demo.enable(user.id)
+    await message.answer(texts.demo_on(minutes))
+
+
+async def _send_stats(target: Message, db: Database, user: User | None) -> None:
+    if user is None:
+        return
+
+    stats = await db.get_stats(user.id)
+    if stats is None:
+        await target.answer(texts.NO_STATS, reply_markup=keyboards.back_menu())
+        return
+
+    await target.answer(
+        texts.user_stats(
+            display_name(user), stats.count, stats.best, stats.average, stats.last
+        ),
+        reply_markup=keyboards.back_menu(),
+    )

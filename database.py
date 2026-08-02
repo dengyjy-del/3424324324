@@ -1,0 +1,581 @@
+"""
+Хранилище с двумя бэкендами.
+
+    sqlite:///looksmax.db        локальная разработка и обычный VPS
+    postgresql://user:pass@host  serverless (Vercel + Neon/Supabase)
+
+Выбор делает create_database() по схеме URL. Интерфейс общий, поэтому бот и
+мини-апп не знают, где лежат данные.
+
+Почему на serverless нужен Postgres: файловая система там эфемерна и не
+разделяется между вызовами функции, так что SQLite потеряет данные при первом
+же холодном старте.
+
+Не хранятся ни фотографии, ни юзернеймы, ни почта: только Telegram ID и числа.
+"""
+
+from __future__ import annotations
+
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+# ─────────────────────────────── модели ────────────────────────────────────
+
+
+@dataclass
+class UserStats:
+    count: int
+    best: float
+    average: float
+    last: float
+
+
+@dataclass
+class HistoryPoint:
+    label: str      # ключ периода: 2026-08-02 / 2026-W31 / 2026-08
+    value: float    # средний балл за период
+    count: int      # сколько отчётов попало в период
+
+
+PERIODS = ("day", "week", "month")
+
+# Записи о виденных альбомах живут недолго — нужны только чтобы не выдать
+# три отчёта на пачку из трёх фото.
+ALBUM_TTL = 300.0
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ─────────────────────────────── интерфейс ─────────────────────────────────
+
+
+class BaseDatabase(ABC):
+    @abstractmethod
+    async def connect(self) -> None: ...
+
+    @abstractmethod
+    async def ping(self) -> None:
+        """Дешёвый запрос: проверить, что база действительно отвечает."""
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+    @abstractmethod
+    async def ensure_user(self, user_id: int) -> None: ...
+
+    @abstractmethod
+    async def set_declared_age(self, user_id: int, age: int) -> None: ...
+
+    @abstractmethod
+    async def get_declared_age(self, user_id: int) -> int | None: ...
+
+    @abstractmethod
+    async def save_rating(self, user_id: int, report_id: str, overall: float) -> bool: ...
+
+    @abstractmethod
+    async def get_stats(self, user_id: int) -> UserStats | None: ...
+
+    @abstractmethod
+    async def history(
+        self, user_id: int, period: str = "day", limit: int = 30
+    ) -> list[HistoryPoint]: ...
+
+    # Состояние, которое раньше жило в памяти процесса. На serverless память
+    # между вызовами не сохраняется, поэтому оно переехало в базу.
+
+    @abstractmethod
+    async def start_demo(self, user_id: int, ttl_seconds: float) -> None: ...
+
+    @abstractmethod
+    async def stop_demo(self, user_id: int) -> None: ...
+
+    @abstractmethod
+    async def demo_seconds_left(self, user_id: int) -> float: ...
+
+    @abstractmethod
+    async def claim_album(self, media_group_id: str) -> bool:
+        """True, если этот альбом видим впервые."""
+
+
+# ─────────────────────────────── SQLite ────────────────────────────────────
+
+SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id       INTEGER PRIMARY KEY,
+    created_at    TEXT NOT NULL,
+    ratings_count INTEGER NOT NULL DEFAULT 0,
+    best_overall  REAL    NOT NULL DEFAULT 0,
+    last_overall  REAL    NOT NULL DEFAULT 0,
+    sum_overall   REAL    NOT NULL DEFAULT 0,
+    declared_age  INTEGER,
+    onboarded_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ratings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    report_id  TEXT    NOT NULL,
+    overall    REAL    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS demo_sessions (
+    user_id    INTEGER PRIMARY KEY,
+    expires_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS seen_albums (
+    album_key  TEXT PRIMARY KEY,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ratings_unique ON ratings(user_id, report_id);
+"""
+
+SQLITE_BUCKETS = {"day": "%Y-%m-%d", "week": "%Y-W%W", "month": "%Y-%m"}
+
+
+class SQLiteDatabase(BaseDatabase):
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._conn = None
+
+    async def ping(self) -> None:
+        async with self.conn.execute("SELECT 1"):
+            pass
+
+    async def connect(self) -> None:
+        import aiosqlite
+
+        self._conn = await aiosqlite.connect(self._path)
+        self._conn.row_factory = aiosqlite.Row
+        await self._conn.executescript(SQLITE_SCHEMA)
+        await self._migrate()
+        await self._conn.commit()
+
+    async def _migrate(self) -> None:
+        async with self.conn.execute("PRAGMA table_info(users)") as cursor:
+            columns = {row["name"] for row in await cursor.fetchall()}
+
+        if "display_name" in columns:
+            await self.conn.execute("ALTER TABLE users DROP COLUMN display_name")
+
+        for column, ddl in (
+            ("declared_age", "ALTER TABLE users ADD COLUMN declared_age INTEGER"),
+            ("onboarded_at", "ALTER TABLE users ADD COLUMN onboarded_at TEXT"),
+        ):
+            if column not in columns:
+                await self.conn.execute(ddl)
+
+    async def close(self) -> None:
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
+
+    @property
+    def conn(self):
+        if self._conn is None:
+            raise RuntimeError("База не подключена: вызови connect().")
+        return self._conn
+
+    async def ensure_user(self, user_id: int) -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, ?)",
+            (user_id, _now_iso()),
+        )
+        await self.conn.commit()
+
+    async def set_declared_age(self, user_id: int, age: int) -> None:
+        await self.ensure_user(user_id)
+        await self.conn.execute(
+            """
+            UPDATE users
+               SET declared_age = ?, onboarded_at = COALESCE(onboarded_at, ?)
+             WHERE user_id = ?
+            """,
+            (age, _now_iso(), user_id),
+        )
+        await self.conn.commit()
+
+    async def get_declared_age(self, user_id: int) -> int | None:
+        async with self.conn.execute(
+            "SELECT declared_age FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["declared_age"]) if row and row["declared_age"] else None
+
+    async def save_rating(self, user_id: int, report_id: str, overall: float) -> bool:
+        await self.ensure_user(user_id)
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO ratings (user_id, report_id, overall, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (user_id, report_id, overall, _now_iso()),
+        )
+        is_new = cursor.rowcount > 0
+
+        if is_new:
+            await self.conn.execute(
+                """
+                UPDATE users
+                   SET ratings_count = ratings_count + 1,
+                       sum_overall   = sum_overall + ?,
+                       last_overall  = ?,
+                       best_overall  = MAX(best_overall, ?)
+                 WHERE user_id = ?
+                """,
+                (overall, overall, overall, user_id),
+            )
+
+        await self.conn.commit()
+        return is_new
+
+    async def get_stats(self, user_id: int) -> UserStats | None:
+        async with self.conn.execute(
+            """
+            SELECT ratings_count, best_overall, last_overall, sum_overall
+              FROM users WHERE user_id = ?
+            """,
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row is None or row["ratings_count"] == 0:
+            return None
+
+        count = int(row["ratings_count"])
+        return UserStats(
+            count=count,
+            best=round(float(row["best_overall"]), 1),
+            average=round(float(row["sum_overall"]) / count, 1),
+            last=round(float(row["last_overall"]), 1),
+        )
+
+    async def history(
+        self, user_id: int, period: str = "day", limit: int = 30
+    ) -> list[HistoryPoint]:
+        fmt = SQLITE_BUCKETS.get(period)
+        if fmt is None:
+            raise ValueError(f"неизвестный период: {period}")
+
+        async with self.conn.execute(
+            f"""
+              SELECT strftime('{fmt}', created_at) AS bucket,
+                     AVG(overall) AS value, COUNT(*) AS cnt
+                FROM ratings WHERE user_id = ?
+            GROUP BY bucket ORDER BY bucket DESC LIMIT ?
+            """,
+            (user_id, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        return [
+            HistoryPoint(row["bucket"], round(float(row["value"]), 1), int(row["cnt"]))
+            for row in reversed(rows)
+        ]
+
+    async def start_demo(self, user_id: int, ttl_seconds: float) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO demo_sessions (user_id, expires_at) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET expires_at = excluded.expires_at
+            """,
+            (user_id, time.time() + ttl_seconds),
+        )
+        await self.conn.commit()
+
+    async def stop_demo(self, user_id: int) -> None:
+        await self.conn.execute("DELETE FROM demo_sessions WHERE user_id = ?", (user_id,))
+        await self.conn.commit()
+
+    async def demo_seconds_left(self, user_id: int) -> float:
+        async with self.conn.execute(
+            "SELECT expires_at FROM demo_sessions WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return 0.0
+        return max(0.0, float(row["expires_at"]) - time.time())
+
+    async def claim_album(self, media_group_id: str) -> bool:
+        now = time.time()
+        await self.conn.execute(
+            "DELETE FROM seen_albums WHERE created_at < ?", (now - ALBUM_TTL,)
+        )
+        cursor = await self.conn.execute(
+            "INSERT OR IGNORE INTO seen_albums (album_key, created_at) VALUES (?, ?)",
+            (media_group_id, now),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+
+# ────────────────────────────── PostgreSQL ─────────────────────────────────
+
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id       BIGINT PRIMARY KEY,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ratings_count INTEGER NOT NULL DEFAULT 0,
+    best_overall  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_overall  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    sum_overall   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    declared_age  INTEGER,
+    onboarded_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS ratings (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    report_id  TEXT   NOT NULL,
+    overall    DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS demo_sessions (
+    user_id    BIGINT PRIMARY KEY,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS seen_albums (
+    album_key  TEXT PRIMARY KEY,
+    created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ratings_unique ON ratings(user_id, report_id);
+"""
+
+PG_BUCKETS = {"day": "YYYY-MM-DD", "week": 'IYYY-"W"IW', "month": "YYYY-MM"}
+
+
+# Параметры, которые понимает psql, но не понимает asyncpg. Он не отбрасывает
+# их, а отправляет в Postgres как настройки сервера — и соединение падает с
+# «unrecognized configuration parameter». Neon и Supabase кладут
+# channel_binding в строку, которую дают кнопкой «Copy snippet».
+UNSUPPORTED_DSN_PARAMS = frozenset({"channel_binding", "gssencmode", "sslnegotiation"})
+
+
+def sanitize_dsn(dsn: str) -> str:
+    """Приводит строку подключения к тому, что переваривает asyncpg."""
+    dsn = dsn.strip().replace("postgres://", "postgresql://", 1)
+    parts = urlparse(dsn)
+
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in UNSUPPORTED_DSN_PARAMS
+    ]
+
+    return urlunparse(parts._replace(query=urlencode(kept)))
+
+
+class PostgresDatabase(BaseDatabase):
+    def __init__(self, dsn: str) -> None:
+        self._dsn = sanitize_dsn(dsn)
+        self._pool = None
+
+    async def ping(self) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+
+    async def connect(self) -> None:
+        import asyncpg
+
+        # statement_cache_size=0 обязателен при работе через pgbouncer в
+        # transaction mode (пулер Neon и Supabase): иначе подготовленные
+        # выражения разъезжаются между соединениями.
+        self._pool = await asyncpg.create_pool(
+            self._dsn,
+            min_size=0,
+            max_size=4,
+            statement_cache_size=0,
+            command_timeout=15,
+        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(PG_SCHEMA)
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    @property
+    def pool(self):
+        if self._pool is None:
+            raise RuntimeError("База не подключена: вызови connect().")
+        return self._pool
+
+    async def ensure_user(self, user_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+                user_id,
+            )
+
+    async def set_declared_age(self, user_id: int, age: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO users (user_id, declared_age, onboarded_at)
+                     VALUES ($1, $2, NOW())
+                ON CONFLICT (user_id) DO UPDATE
+                   SET declared_age = EXCLUDED.declared_age,
+                       onboarded_at = COALESCE(users.onboarded_at, NOW())
+                """,
+                user_id,
+                age,
+            )
+
+    async def get_declared_age(self, user_id: int) -> int | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT declared_age FROM users WHERE user_id = $1", user_id
+            )
+        return int(value) if value else None
+
+    async def save_rating(self, user_id: int, report_id: str, overall: float) -> bool:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO ratings (user_id, report_id, overall)
+                         VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, report_id) DO NOTHING
+                      RETURNING id
+                    """,
+                    user_id,
+                    report_id,
+                    overall,
+                )
+                if inserted is None:
+                    return False
+
+                await conn.execute(
+                    """
+                    UPDATE users
+                       SET ratings_count = ratings_count + 1,
+                           sum_overall   = sum_overall + $1,
+                           last_overall  = $1,
+                           best_overall  = GREATEST(best_overall, $1)
+                     WHERE user_id = $2
+                    """,
+                    overall,
+                    user_id,
+                )
+        return True
+
+    async def get_stats(self, user_id: int) -> UserStats | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT ratings_count, best_overall, last_overall, sum_overall
+                  FROM users WHERE user_id = $1
+                """,
+                user_id,
+            )
+
+        if row is None or row["ratings_count"] == 0:
+            return None
+
+        count = int(row["ratings_count"])
+        return UserStats(
+            count=count,
+            best=round(float(row["best_overall"]), 1),
+            average=round(float(row["sum_overall"]) / count, 1),
+            last=round(float(row["last_overall"]), 1),
+        )
+
+    async def history(
+        self, user_id: int, period: str = "day", limit: int = 30
+    ) -> list[HistoryPoint]:
+        fmt = PG_BUCKETS.get(period)
+        if fmt is None:
+            raise ValueError(f"неизвестный период: {period}")
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                  SELECT to_char(created_at, '{fmt}') AS bucket,
+                         AVG(overall) AS value, COUNT(*) AS cnt
+                    FROM ratings WHERE user_id = $1
+                GROUP BY bucket ORDER BY bucket DESC LIMIT $2
+                """,
+                user_id,
+                limit,
+            )
+
+        return [
+            HistoryPoint(row["bucket"], round(float(row["value"]), 1), int(row["cnt"]))
+            for row in reversed(rows)
+        ]
+
+    async def start_demo(self, user_id: int, ttl_seconds: float) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO demo_sessions (user_id, expires_at) VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
+                """,
+                user_id,
+                time.time() + ttl_seconds,
+            )
+
+    async def stop_demo(self, user_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM demo_sessions WHERE user_id = $1", user_id)
+
+    async def demo_seconds_left(self, user_id: int) -> float:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT expires_at FROM demo_sessions WHERE user_id = $1", user_id
+            )
+        return 0.0 if value is None else max(0.0, float(value) - time.time())
+
+    async def claim_album(self, media_group_id: str) -> bool:
+        now = time.time()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM seen_albums WHERE created_at < $1", now - ALBUM_TTL
+            )
+            claimed = await conn.fetchval(
+                """
+                INSERT INTO seen_albums (album_key, created_at) VALUES ($1, $2)
+                ON CONFLICT DO NOTHING RETURNING album_key
+                """,
+                media_group_id,
+                now,
+            )
+        return claimed is not None
+
+
+# ─────────────────────────────── фабрика ───────────────────────────────────
+
+
+def create_database(url: str) -> BaseDatabase:
+    """
+    postgresql://... или postgres://...  → PostgresDatabase
+    всё остальное                        → SQLiteDatabase
+    """
+    scheme = urlparse(url).scheme
+
+    if scheme in ("postgres", "postgresql"):
+        return PostgresDatabase(url)
+
+    if scheme == "sqlite":
+        path = url.replace("sqlite:///", "", 1).replace("sqlite://", "", 1)
+        return SQLiteDatabase(path or "looksmax.db")
+
+    return SQLiteDatabase(url)
+
+
+# Совместимость со старым импортом `from database import Database`
+Database = SQLiteDatabase

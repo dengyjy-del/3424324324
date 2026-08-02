@@ -1,0 +1,293 @@
+"""Тексты сообщений и рендеринг отчётов (HTML parse mode)."""
+
+from __future__ import annotations
+
+from html import escape
+
+from rating import Report, pick_tip, render_bar
+
+LINE = "━━━━━━━━━━━━━━━━━━"
+
+# Название бота. Подставляется из BRAND_NAME при старте — менять здесь не нужно.
+BRAND = "LOOKSCORE"
+
+
+def configure(brand_name: str) -> None:
+    """Вызывается один раз при запуске."""
+    global BRAND
+    BRAND = brand_name
+
+DISCLAIMER_SHORT = "<i>Развлекательный формат. Оценки генерируются алгоритмом.</i>"
+
+DISCLAIMER_FULL = (
+    "<i>⚠️ Бот развлекательный. Оценки формируются алгоритмом и не являются "
+    "экспертным или медицинским заключением.</i>"
+)
+
+
+def safe(value: str | None, fallback: str = "аноним") -> str:
+    return escape(value) if value else fallback
+
+
+# ───────────────────────────── статичные ───────────────────────────────────
+
+
+def start(name: str) -> str:
+    return (
+        f"🧬 <b>{BRAND}</b>\n"
+        "<i>система оценки лицевой эстетики</i>\n"
+        f"{LINE}\n"
+        f"Привет, <b>{safe(name)}</b>.\n"
+        "Разбираю фото по <b>10 параметрам</b> и выдаю общий балл, тир и "
+        "персональный разбор зон роста.\n"
+        f"{LINE}\n"
+        "<b>КАК ПОЛУЧИТЬ ОТЧЁТ</b>\n"
+        "<blockquote>1. Пришли фото анфас\n"
+        "2. Ровный свет, без фильтров\n"
+        "3. Отчёт придёт через ~10 секунд</blockquote>\n"
+        "<b>ЧТО ОЦЕНИВАЮ</b>\n"
+        "<blockquote expandable>👁 Канторальный наклон\n"
+        "🦅 Посадка глаз\n"
+        "🗿 Линия челюсти\n"
+        "📐 Гониальный угол\n"
+        "💎 Скуловые кости\n"
+        "⚡ Проекция подбородка\n"
+        "🔻 Гармония носа\n"
+        "⚖️ Симметрия лица\n"
+        "✨ Качество кожи\n"
+        "📊 Пропорции лица</blockquote>\n"
+        "📸 <b>Отправь фото — и начнём.</b>\n"
+        f"{DISCLAIMER_SHORT}"
+    )
+
+
+HELP = (
+    "📖 <b>СПРАВКА</b>\n"
+    f"{LINE}\n"
+    "<b>Команды</b>\n"
+    "<blockquote>/start — главный экран\n"
+    "/stats — твоя статистика\n"
+    "/about — о боте и приватности\n"
+    "/help — это сообщение</blockquote>\n"
+    "<b>Как получить адекватный отчёт</b>\n"
+    "<blockquote>• фото анфас, лицо целиком в кадре\n"
+    "• дневной или мягкий боковой свет\n"
+    "• нейтральное выражение\n"
+    "• без фильтров и бьютификации\n"
+    "• камера на уровне глаз</blockquote>\n"
+    "<b>Почему повторное фото даёт то же самое?</b>\n"
+    "Отчёт привязан к файлу: одно фото — один результат.\n"
+    f"{DISCLAIMER_SHORT}"
+)
+
+
+ABOUT = (
+    "ℹ️ <b>О БОТЕ</b>\n"
+    f"{LINE}\n"
+    "<b>Формат.</b> Развлекательный проект. Оценки формируются алгоритмом и не "
+    "являются экспертным, медицинским или косметологическим заключением.\n"
+    "<b>Приватность.</b> Бот <b>не скачивает и не хранит</b> фото. В базе только "
+    "обезличенные баллы.\n"
+    "<b>Стабильность.</b> Одно фото — один результат. Накрутить повторной "
+    "отправкой не выйдет.\n"
+    "<b>Здравый смысл.</b> Сон, уход, спорт и уверенность влияют на то, как ты "
+    "выглядишь, сильнее любого рейтинга из интернета. Если самооценка всерьёз "
+    "завязана на цифру — это повод поговорить с живым человеком, а не с ботом.\n"
+    "<i>18+</i>"
+)
+
+
+NEED_PHOTO = (
+    "📸 <b>Нужно фото</b>\n"
+    "Пришли изображение лица анфас — соберу отчёт.\n"
+    "<blockquote>Ровный свет · без фильтров · камера на уровне глаз</blockquote>"
+)
+
+
+DOC_AS_PHOTO = (
+    "📎 <b>Это файл, а не фото</b>\n"
+    "Отправь картинку как <b>фото</b> (значок галереи), иначе превью и сжатие "
+    "работают некорректно."
+)
+
+
+COOLDOWN = "⏳ <b>Не так быстро.</b> Модуль анализа остывает — пара секунд."
+
+NO_STATS = "📊 <b>СТАТИСТИКА</b>\nПока пусто. Пришли первое фото."
+
+# ────────────────────────── подписка на канал ──────────────────────────────
+
+
+def gate(channel_title: str) -> str:
+    return (
+        "🔒 <b>ДОСТУП ЗАКРЫТ</b>\n"
+        f"{LINE}\n"
+        f"Анализ доступен подписчикам <b>{safe(channel_title, 'канала')}</b>.\n"
+        "<blockquote>1. Жми «Подписаться»\n"
+        "2. Возвращайся и жми «Я подписался»\n"
+        "3. Отправляй фото</blockquote>\n"
+        "👇 <b>Два клика — и доступ открыт.</b>"
+    )
+
+
+GATE_FAILED = "Подписка не найдена. Подпишись на канал и жми проверку ещё раз."
+
+GATE_PASSED = (
+    "✅ <b>ДОСТУП ОТКРЫТ</b>\n"
+    f"{LINE}\n"
+    "Подписка подтверждена. Отправляй фото анфас — соберу полный отчёт.\n"
+    "<blockquote>Ровный свет · без фильтров · камера на уровне глаз</blockquote>"
+)
+
+
+# ───────────────────────── анимация анализа ────────────────────────────────
+
+SCAN_STAGES: tuple[tuple[str, int], ...] = (
+    ("Инициализация модуля", 8),
+    ("Поиск лицевых маркеров", 27),
+    ("Замер угловых характеристик", 51),
+    ("Оценка текстур и пропорций", 74),
+    ("Сборка отчёта", 93),
+    ("Готово", 100),
+)
+
+
+def scan_frame(label: str, percent: int) -> str:
+    return (
+        "🔬 <b>АНАЛИЗ</b>\n"
+        f"<code>{render_bar(percent / 10)}</code>  <b>{percent}%</b>\n"
+        f"<i>{label}…</i>"
+    )
+
+
+# ─────────────────────────────── отчёт ─────────────────────────────────────
+
+
+def report_card(report: Report, name: str, show_header: bool = True) -> str:
+    lines = [f"🧬 <b>{BRAND}</b>"]
+
+    if show_header:
+        lines.append(f"<i>отчёт #{report.report_id} · {safe(name)}</i>")
+
+    lines += [
+        LINE,
+        "<b>ОБЩИЙ БАЛЛ</b>",
+        f"<code>{report.bar}</code>  <b>{report.overall}</b><i>/10</i>",
+        f"{report.tier.emoji} <b>{report.tier.code}</b> — {report.tier.title}",
+        f"📈 Выше, чем у <b>{report.percentile}%</b> пользователей",
+        LINE,
+        "📋 <b>ДЕТАЛИЗАЦИЯ</b>",
+    ]
+
+    lines += [
+        f"{s.parameter.emoji} {s.parameter.title} — <b>{s.value}</b>"
+        for s in report.scores
+    ]
+
+    lines += [LINE, f"💬 <i>{report.tier.comment}</i>"]
+
+    return "\n".join(lines)
+
+
+def report_details(report: Report, salt: str, show_header: bool = True) -> str:
+    strong = report.strongest(3)
+    weak = report.weakest(3)
+
+    strong_block = "\n".join(
+        f"{s.parameter.emoji} {s.parameter.title} — <b>{s.value}</b>" for s in strong
+    )
+    weak_block = "\n".join(
+        f"{s.parameter.emoji} {s.parameter.title} — <b>{s.value}</b>" for s in weak
+    )
+    tips_block = "\n\n".join(
+        f"{s.parameter.emoji} <b>{s.parameter.title}</b>\n{pick_tip(report, s, salt)}"
+        for s in weak
+    )
+
+    lines = ["🔬 <b>РАЗБОР ПРОФИЛЯ</b>"]
+    if show_header:
+        lines.append(f"<i>отчёт #{report.report_id}</i>")
+
+    lines += [
+        LINE,
+        "💪 <b>СИЛЬНЫЕ СТОРОНЫ</b>",
+        f"<blockquote>{strong_block}</blockquote>",
+        "🎯 <b>ЗОНЫ РОСТА</b>",
+        f"<blockquote>{weak_block}</blockquote>",
+        LINE,
+        "🧭 <b>ЧТО МОЖНО УСИЛИТЬ</b>",
+        f"<blockquote expandable>{tips_block}</blockquote>",
+        LINE,
+        "🚀 <b>ПОТЕНЦИАЛ</b>",
+        f"<code>{report.potential_bar}</code>  <b>{report.potential}</b><i>/10</i>",
+        f"<i>Запас роста: +{round(report.potential - report.overall, 1)} при "
+        "системной работе над сном, уходом, спортом и стилем.</i>",
+        DISCLAIMER_FULL,
+    ]
+
+    return "\n".join(lines)
+
+
+# ───────────────────────────── статистика ──────────────────────────────────
+
+
+def user_stats(name: str, count: int, best: float, average: float, last: float) -> str:
+    from rating import tier_for
+
+    tier = tier_for(best)
+    return (
+        "📊 <b>ТВОЯ СТАТИСТИКА</b>\n"
+        f"<i>{safe(name)}</i>\n"
+        f"{LINE}\n"
+        f"🗂 Отчётов собрано: <b>{count}</b>\n"
+        f"🏅 Лучший: <code>{render_bar(best)}</code>  <b>{best}</b>\n"
+        f"📉 Средний: <code>{render_bar(average)}</code>  <b>{average}</b>\n"
+        f"🕒 Последний: <code>{render_bar(last)}</code>  <b>{last}</b>\n"
+        f"{LINE}\n"
+        f"Текущий тир: {tier.emoji} <b>{tier.code}</b> — {tier.title}"
+    )
+
+
+# ───────────────────────────── демо-режим ──────────────────────────────────
+
+
+def demo_on(minutes: float) -> str:
+    return (
+        "🎬 <b>РЕЖИМ СЪЁМКИ ВКЛЮЧЁН</b>\n"
+        f"{LINE}\n"
+        "Оценки: <b>2.0–3.5</b>\n"
+        "Шапка с номером отчёта и юзернеймом скрыта\n"
+        "Результаты не идут в статистику и топ\n"
+        f"{LINE}\n"
+        f"⏱ Автовыключение через <b>{int(minutes)} мин</b>.\n"
+        "Выключить сразу: /demo_off\n"
+        "<i>Режим действует только в этом чате и только для тебя.</i>"
+    )
+
+
+def demo_still_on(minutes_left: int) -> str:
+    return (
+        f"🎬 <b>Режим съёмки активен.</b> Осталось ~{minutes_left} мин.\n"
+        "Выключить: /demo_off"
+    )
+
+
+DEMO_OFF = (
+    "⏹ <b>Режим съёмки выключен.</b>\nОценки вернулись в обычный диапазон."
+)
+
+DEMO_NOT_ACTIVE = "Режим съёмки и так выключен."
+
+DEMO_DENIED = (
+    "🚫 <b>Недостаточно прав.</b>\n"
+    "Режим съёмки доступен только ID из <code>ADMIN_IDS</code>."
+)
+
+
+def whoami(user_id: int) -> str:
+    return (
+        "🆔 <b>Твой Telegram ID</b>\n"
+        f"<code>{user_id}</code>\n"
+        "<i>Впиши его в ADMIN_IDS в .env, чтобы закрыть режим съёмки "
+        "от посторонних.</i>"
+    )
