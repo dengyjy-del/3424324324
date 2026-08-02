@@ -169,17 +169,22 @@ function renderToday(data) {
   });
 
   const scans = data.scans;
+  const quotaText = scans.unlimited
+    ? `Без ограничений · собрано сегодня: ${scans.used}`
+    : scans.left > 0
+      ? `Осталось ${scans.left} из ${scans.limit}`
+      : "Лимит исчерпан, новые после полуночи";
+
+  const quotaDots = scans.unlimited
+    ? '<span class="quota-inf">∞</span>'
+    : `<div class="quota-dots">${Array.from(
+        { length: scans.limit },
+        (_, i) => `<i class="${i < scans.left ? "left" : ""}"></i>`
+      ).join("")}</div>`;
+
   $("td-quota").innerHTML =
     `<div style="min-width:0"><h3>Отчёты сегодня</h3>` +
-    `<p class="tiny" style="margin-top:3px">${
-      scans.left > 0
-        ? `Осталось ${scans.left} из ${scans.limit}`
-        : "Лимит исчерпан, новые после полуночи"
-    }</p></div>` +
-    `<div class="quota-dots">${Array.from(
-      { length: scans.limit },
-      (_, i) => `<i class="${i < scans.left ? "left" : ""}"></i>`
-    ).join("")}</div>`;
+    `<p class="tiny" style="margin-top:3px">${quotaText}</p></div>${quotaDots}`;
 
   $("td-achievements").innerHTML = data.achievements
     .map(

@@ -889,20 +889,32 @@ h3 {
   z-index: 60;
   left: 16px;
   right: 16px;
-  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 24px);
+  bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 26px);
   padding: 14px 17px;
   border-radius: var(--radius-md);
-  background: rgba(22, 24, 34, 0.9);
+  background: rgba(22, 24, 34, 0.94);
   border: 1px solid var(--stroke);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   font-size: 13.5px;
   font-weight: 540;
-  transform: translateY(160%);
-  transition: transform 0.5s var(--spring);
+  line-height: 1.42;
+
+  /* Раньше скрытое состояние уезжало на translateY(160%). Для длинного
+     текста этого не хватало: верхушка плашки оставалась на экране и
+     налезала на таб-бар. Теперь скрытие через прозрачность — невидимый
+     тост гарантированно ничего не перекрывает и не ловит нажатия. */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(14px) scale(0.97);
+  transition: opacity 0.3s var(--ease), transform 0.42s var(--spring),
+    visibility 0.3s;
 }
 
 .toast.show {
+  opacity: 1;
+  visibility: visible;
   transform: none;
 }
 
@@ -1127,3 +1139,14 @@ h3 {
 
 .ach-emoji { font-size: 22px; }
 .ach-title { font-size: 10.5px; font-weight: 620; margin-top: 5px; line-height: 1.25; }
+
+.quota-inf {
+  margin-left: auto;
+  font-size: 23px;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-rose));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
