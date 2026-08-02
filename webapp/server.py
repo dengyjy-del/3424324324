@@ -128,9 +128,10 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
 
         # Суточный лимит: даёт причину вернуться завтра и заодно не
         # превращает приложение в перепроверку своей оценки по десять раз
-        # за вечер. В режиме съёмки не действует.
+        # за вечер. Не действует в режиме съёмки и у ID из ADMIN_IDS —
+        # владельцу лимит мешал бы снимать контент и проверять сборки.
         in_demo_check = await demo.is_active(user.id)
-        if not in_demo_check:
+        if not in_demo_check and not config.is_admin(user.id):
             used = await db.count_ratings_since(user.id, _day_start())
             if used >= config.daily_scan_limit:
                 raise HTTPException(
@@ -239,6 +240,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         opened = engagement.unlocked(streak, scans_total)
 
         used_today = await db.count_ratings_since(user_id, _day_start())
+        unlimited = config.is_admin(user_id)
 
         return {
             "date": today_date.isoformat(),
@@ -273,6 +275,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
                 "used": used_today,
                 "limit": config.daily_scan_limit,
                 "left": max(0, config.daily_scan_limit - used_today),
+                "unlimited": unlimited,
             },
             "achievements": [
                 {
