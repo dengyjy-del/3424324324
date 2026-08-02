@@ -109,8 +109,13 @@ class BaseDatabase(ABC):
     async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None: ...
 
     @abstractmethod
-    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
-        """Сколько отчётов собрано начиная с момента since_iso."""
+    async def count_ratings_since(self, user_id: int, since: datetime) -> int:
+        """
+        Сколько отчётов собрано начиная с момента since.
+
+        Принимает именно datetime, а не строку: asyncpg строго типизирован и
+        отвергает строку там, где колонка объявлена как timestamptz.
+        """
 
 
 # ─────────────────────────────── SQLite ────────────────────────────────────
@@ -353,10 +358,11 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
 
-    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
+    async def count_ratings_since(self, user_id: int, since: datetime) -> int:
+        # В SQLite created_at хранится строкой ISO, поэтому приводим сами.
         async with self.conn.execute(
             "SELECT COUNT(*) AS n FROM ratings WHERE user_id = ? AND created_at >= ?",
-            (user_id, since_iso),
+            (user_id, since.isoformat(timespec="seconds")),
         ) as cursor:
             row = await cursor.fetchone()
         return int(row["n"]) if row else 0
@@ -630,15 +636,12 @@ class PostgresDatabase(BaseDatabase):
                 mask,
             )
 
-    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
+    async def count_ratings_since(self, user_id: int, since: datetime) -> int:
         async with self.pool.acquire() as conn:
             value = await conn.fetchval(
-                """
-                SELECT COUNT(*) FROM ratings
-                 WHERE user_id = $1 AND created_at >= $2::timestamptz
-                """,
+                "SELECT COUNT(*) FROM ratings WHERE user_id = $1 AND created_at >= $2",
                 user_id,
-                since_iso,
+                since,
             )
         return int(value or 0)
 
