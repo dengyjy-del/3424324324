@@ -55,28 +55,42 @@ def verify_init_data(init_data: str, bot_token: str, max_age: int = MAX_AUTH_AGE
 
     pairs = parse_qsl(init_data, keep_blank_values=True)
     received_hash = ""
-    payload: list[tuple[str, str]] = []
+    with_signature: list[tuple[str, str]] = []
+    without_signature: list[tuple[str, str]] = []
 
     for key, value in pairs:
         if key == "hash":
             received_hash = value
-        elif key != "signature":
-            payload.append((key, value))
+            continue
+        with_signature.append((key, value))
+        if key != "signature":
+            without_signature.append((key, value))
 
     if not received_hash:
         raise AuthError("в initData нет подписи")
 
-    secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
-    expected = hmac.new(
-        secret, _data_check_string(payload).encode(), hashlib.sha256
-    ).hexdigest()
+    secret = hmac.new(b"WebAppData", bot_token.strip().encode(), hashlib.sha256).digest()
 
-    # Сравнение постоянного времени — чтобы подпись нельзя было подобрать
-    # по времени ответа сервера.
-    if not hmac.compare_digest(expected, received_hash):
-        raise AuthError("подпись не совпала")
+    # Поле signature (Ed25519-подпись для сторонней проверки) Telegram добавил
+    # позже самого hash, и в разных версиях клиента оно то участвует в расчёте
+    # HMAC, то нет. Оба набора приходят от Telegram, поэтому принимаем любой
+    # совпавший — иначе часть пользователей не сможет войти.
+    for candidate in (without_signature, with_signature):
+        expected = hmac.new(
+            secret, _data_check_string(candidate).encode(), hashlib.sha256
+        ).hexdigest()
+        # Сравнение постоянного времени: подпись нельзя подобрать по времени
+        # ответа сервера.
+        if hmac.compare_digest(expected, received_hash):
+            break
+    else:
+        raise AuthError(
+            "Подпись Telegram не совпала. Чаще всего это значит, что BOT_TOKEN "
+            "относится к другому боту, а не к тому, через которого открыто "
+            "приложение."
+        )
 
-    fields = dict(payload)
+    fields = dict(with_signature)
 
     auth_date = fields.get("auth_date", "")
     if not auth_date.isdigit():
