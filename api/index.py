@@ -31,6 +31,11 @@ from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("looksmax.vercel")
 
+# ВАЖНО: это присваивание должно остаться на верхнем уровне файла.
+# Сборщик Vercel ищет переменную `app` статическим разбором исходника, не
+# запуская его, и присваивание внутри try/except попросту не видит — сборка
+# падает с «Could not find a top-level "app"». Ниже объект заменяется на
+# настоящее приложение, а при ошибке инициализации — на диагностическое.
 app = FastAPI()
 
 # Переменные, без которых приложение не поднимется или будет вести себя странно.
@@ -69,9 +74,12 @@ try:
     texts.configure(config.brand_name)
 
     if not (PUBLIC_DIR / "index.html").exists():
-        raise RuntimeError(
-            f"Не найден файл public/index.html (искали в {PUBLIC_DIR}). "
-            "Убедись, что папка public/ попала в репозиторий."
+        # На Vercel интерфейс собирается отдельно и раздаётся с CDN, поэтому
+        # в бандл функции он не попадает — это норма, а не ошибка. Локально
+        # файл нужен, так что предупреждаем, но приложение не роняем.
+        logger.warning(
+            "Не найден %s — интерфейс отдаётся отдельной сборкой",
+            PUBLIC_DIR / "index.html",
         )
 
     # Самая частая причина «работает локально, падает на Vercel»: не задан
