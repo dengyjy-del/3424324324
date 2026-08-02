@@ -131,7 +131,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         # за вечер. В режиме съёмки не действует.
         in_demo_check = await demo.is_active(user.id)
         if not in_demo_check:
-            used = await db.count_ratings_since(user.id, _day_start_iso())
+            used = await db.count_ratings_since(user.id, _day_start())
             if used >= config.daily_scan_limit:
                 raise HTTPException(
                     status_code=429,
@@ -218,11 +218,11 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
 
     # ─────────────────────────── хелперы ───────────────────────────────
 
-    def _day_start_iso() -> str:
-        start = datetime.now(timezone.utc).replace(
+    def _day_start() -> datetime:
+        """Полночь по UTC: с неё считается суточный лимит отчётов."""
+        return datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        return start.isoformat(timespec="seconds")
 
     async def _today_payload(user_id: int) -> dict:
         today_date = date.today()
@@ -238,7 +238,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         upcoming, days_left = engagement.next_rank(streak.total_days)
         opened = engagement.unlocked(streak, scans_total)
 
-        used_today = await db.count_ratings_since(user_id, _day_start_iso())
+        used_today = await db.count_ratings_since(user_id, _day_start())
 
         return {
             "date": today_date.isoformat(),
