@@ -50,6 +50,19 @@ body {
   overflow: hidden;
 }
 
+/* Полосы прокрутки в мини-аппе не нужны: жест и так очевиден, а на части
+   устройств они рисуются поверх содержимого. */
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
 body {
   background: var(--void);
   color: var(--ink);
@@ -137,6 +150,7 @@ body {
 /* ── Каркас ──────────────────────────────────────────────── */
 
 .shell {
+  max-width: 100%;
   position: relative;
   z-index: 2;
   height: 100%;
@@ -147,6 +161,9 @@ body {
 .screen {
   flex: 1;
   overflow-y: auto;
+  /* Без этого браузер включает и горизонтальную прокрутку, а её полоса
+     рисуется поверх интерфейса прямо над таб-баром. */
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px
     calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 28px);
@@ -931,3 +948,182 @@ h3 {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* ── Экран «Сегодня» ─────────────────────────────────────── */
+
+.streak-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 16px;
+}
+
+.streak-flame {
+  font-size: 34px;
+  line-height: 1;
+  filter: grayscale(1) opacity(0.35);
+  transition: filter 0.5s var(--ease), transform 0.5s var(--spring);
+}
+
+.streak-flame.lit {
+  filter: none;
+  transform: scale(1.08);
+  animation: flicker 2.6s ease-in-out infinite;
+}
+
+@keyframes flicker {
+  0%, 100% { transform: scale(1.08) rotate(-2deg); }
+  50%      { transform: scale(1.14) rotate(2deg); }
+}
+
+.streak-num {
+  font-size: 38px;
+  line-height: 1;
+}
+
+.streak-label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+
+.streak-side {
+  margin-left: auto;
+  text-align: right;
+}
+
+.rank-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rank-emoji {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  font-size: 21px;
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke);
+  flex-shrink: 0;
+}
+
+.rank-bar {
+  height: 7px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.rank-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 100px;
+  background: linear-gradient(90deg, var(--aura-indigo), var(--aura-rose));
+  transition: width 0.9s var(--ease);
+}
+
+/* Строка привычки */
+.habit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border: none;
+  background: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.25s;
+}
+
+.habit:last-of-type { border-bottom: none; }
+.habit:active { background: rgba(255, 255, 255, 0.04); }
+
+.habit-emoji { font-size: 19px; width: 26px; text-align: center; }
+
+.habit-text { flex: 1; min-width: 0; }
+.habit-text b { font-size: 14.5px; font-weight: 560; display: block; }
+.habit-text span { font-size: 11.5px; color: var(--ink-3); }
+
+.habit.done .habit-text b { color: var(--ink-2); text-decoration: line-through; }
+
+/* Галочка */
+.tick {
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  border: 1.8px solid var(--stroke-bright);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: background 0.32s var(--spring), border-color 0.32s, transform 0.32s var(--spring);
+}
+
+.tick svg { width: 13px; height: 13px; opacity: 0; transform: scale(0.4); transition: all 0.32s var(--spring); }
+
+.habit.done .tick {
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-mint));
+  border-color: transparent;
+  transform: scale(1.06);
+}
+
+.habit.done .tick svg { opacity: 1; transform: none; }
+
+.scan-quota {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.quota-dots { display: flex; gap: 5px; margin-left: auto; flex-shrink: 0; }
+
+.quota-dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.quota-dots i.left {
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-rose));
+}
+
+/* Лента достижений */
+.ach-strip {
+  display: flex;
+  gap: 9px;
+  overflow-x: auto;
+  padding: 0 16px 16px;
+}
+
+.ach {
+  flex: 0 0 auto;
+  width: 88px;
+  padding: 13px 8px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--stroke);
+  text-align: center;
+  opacity: 0.38;
+  filter: grayscale(1);
+  transition: opacity 0.4s, filter 0.4s, transform 0.4s var(--spring);
+}
+
+.ach.on {
+  opacity: 1;
+  filter: none;
+  background: var(--glass-strong);
+}
+
+.ach-emoji { font-size: 22px; }
+.ach-title { font-size: 10.5px; font-weight: 620; margin-top: 5px; line-height: 1.25; }

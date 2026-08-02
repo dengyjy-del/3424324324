@@ -101,6 +101,17 @@ class BaseDatabase(ABC):
     async def claim_album(self, media_group_id: str) -> bool:
         """True, если этот альбом видим впервые."""
 
+    @abstractmethod
+    async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
+        """Отметки привычек по дням, начиная с даты since (YYYY-MM-DD)."""
+
+    @abstractmethod
+    async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None: ...
+
+    @abstractmethod
+    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
+        """Сколько отчётов собрано начиная с момента since_iso."""
+
 
 # ─────────────────────────────── SQLite ────────────────────────────────────
 
@@ -132,6 +143,13 @@ CREATE TABLE IF NOT EXISTS demo_sessions (
 CREATE TABLE IF NOT EXISTS seen_albums (
     album_key  TEXT PRIMARY KEY,
     created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS habits (
+    user_id INTEGER NOT NULL,
+    day     TEXT    NOT NULL,
+    mask    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
@@ -316,6 +334,33 @@ class SQLiteDatabase(BaseDatabase):
         await self.conn.commit()
         return cursor.rowcount > 0
 
+    async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
+        async with self.conn.execute(
+            "SELECT day, mask FROM habits WHERE user_id = ? AND day >= ?",
+            (user_id, since),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {row["day"]: int(row["mask"]) for row in rows}
+
+    async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None:
+        await self.ensure_user(user_id)
+        await self.conn.execute(
+            """
+            INSERT INTO habits (user_id, day, mask) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, day) DO UPDATE SET mask = excluded.mask
+            """,
+            (user_id, day, mask),
+        )
+        await self.conn.commit()
+
+    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM ratings WHERE user_id = ? AND created_at >= ?",
+            (user_id, since_iso),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["n"]) if row else 0
+
 
 # ────────────────────────────── PostgreSQL ─────────────────────────────────
 
@@ -347,6 +392,13 @@ CREATE TABLE IF NOT EXISTS demo_sessions (
 CREATE TABLE IF NOT EXISTS seen_albums (
     album_key  TEXT PRIMARY KEY,
     created_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS habits (
+    user_id BIGINT  NOT NULL,
+    day     TEXT    NOT NULL,
+    mask    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
@@ -555,6 +607,40 @@ class PostgresDatabase(BaseDatabase):
                 now,
             )
         return claimed is not None
+
+    async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT day, mask FROM habits WHERE user_id = $1 AND day >= $2",
+                user_id,
+                since,
+            )
+        return {row["day"]: int(row["mask"]) for row in rows}
+
+    async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO habits (user_id, day, mask) VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, day) DO UPDATE SET mask = EXCLUDED.mask
+                """,
+                user_id,
+                day,
+                mask,
+            )
+
+    async def count_ratings_since(self, user_id: int, since_iso: str) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM ratings
+                 WHERE user_id = $1 AND created_at >= $2::timestamptz
+                """,
+                user_id,
+                since_iso,
+            )
+        return int(value or 0)
 
 
 # ─────────────────────────────── фабрика ───────────────────────────────────

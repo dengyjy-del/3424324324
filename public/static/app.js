@@ -9,6 +9,7 @@ const state = {
   initData: "",
   period: "day",
   minAge: 16,
+  streak: 0,
   guides: [],
 };
 
@@ -95,6 +96,7 @@ function initTabs() {
       buttons.forEach((b) => b.classList.toggle("active", b === button));
       movePill(pill, button, tabs);
       showScreen(button.dataset.screen);
+      if (button.dataset.screen === "s-today") loadToday();
       if (button.dataset.screen === "s-profile") {
         loadProfile();
         // Размеры считаются только на видимом экране, иначе подложка
@@ -108,6 +110,120 @@ function initTabs() {
   requestAnimationFrame(() =>
     movePill(pill, buttons.find((b) => b.classList.contains("active")), tabs)
   );
+}
+
+/* ── Экран «Сегодня» ─────────────────────────────────────── */
+
+const CHECK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>';
+
+function renderToday(data) {
+  const streak = data.streak;
+
+  $("td-streak").textContent = streak.current;
+  $("td-best").textContent = streak.best;
+  $("td-flame").classList.toggle("lit", streak.current > 0);
+  $("td-streak-label").textContent =
+    streak.current === 0
+      ? "серия ещё не начата"
+      : streak.grace_used
+        ? "дней подряд · пропуск прощён"
+        : "дней подряд";
+
+  const rank = data.rank;
+  $("td-rank-emoji").textContent = rank.emoji;
+  $("td-rank-title").textContent = rank.title;
+  $("td-rank-caption").textContent = rank.caption;
+
+  if (rank.next) {
+    const done = streak.total_days;
+    const target = done + rank.next.days_left;
+    $("td-rank-fill").style.width = `${Math.min(100, (done / target) * 100)}%`;
+    $("td-rank-next").textContent =
+      `Ещё ${rank.next.days_left} дн. до ранга «${rank.next.title}» ${rank.next.emoji}`;
+  } else {
+    $("td-rank-fill").style.width = "100%";
+    $("td-rank-next").textContent = "Максимальный ранг достигнут";
+  }
+
+  $("td-progress").textContent = `${data.done_today} / ${data.habits.length}`;
+  $("td-need").textContent =
+    data.done_today >= data.need_today
+      ? "День засчитан в серию"
+      : `Отметь ещё ${data.need_today - data.done_today}, чтобы день пошёл в серию`;
+
+  $("td-habits").innerHTML = data.habits
+    .map(
+      (habit) => `
+      <button class="habit${habit.done ? " done" : ""}" data-habit="${habit.key}">
+        <span class="habit-emoji">${habit.emoji}</span>
+        <span class="habit-text"><b>${habit.title}</b><span>${habit.hint}</span></span>
+        <span class="tick">${CHECK}</span>
+      </button>`
+    )
+    .join("");
+
+  document.querySelectorAll("[data-habit]").forEach((button) => {
+    button.addEventListener("click", () => markHabit(button.dataset.habit));
+  });
+
+  const scans = data.scans;
+  $("td-quota").innerHTML =
+    `<div style="min-width:0"><h3>Отчёты сегодня</h3>` +
+    `<p class="tiny" style="margin-top:3px">${
+      scans.left > 0
+        ? `Осталось ${scans.left} из ${scans.limit}`
+        : "Лимит исчерпан, новые после полуночи"
+    }</p></div>` +
+    `<div class="quota-dots">${Array.from(
+      { length: scans.limit },
+      (_, i) => `<i class="${i < scans.left ? "left" : ""}"></i>`
+    ).join("")}</div>`;
+
+  $("td-achievements").innerHTML = data.achievements
+    .map(
+      (item) => `
+      <div class="ach${item.unlocked ? " on" : ""}" title="${item.description}">
+        <div class="ach-emoji">${item.emoji}</div>
+        <div class="ach-title">${item.title}</div>
+      </div>`
+    )
+    .join("");
+}
+
+async function loadToday() {
+  try {
+    renderToday(await api("/api/today"));
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function markHabit(key) {
+  haptic("medium");
+  const body = new FormData();
+  body.append("key", key);
+
+  try {
+    const data = await api("/api/habit", { method: "POST", body });
+    const before = state.streak;
+    renderToday(data);
+    state.streak = data.streak.current;
+
+    // Отмечаем только рост серии — «минус день» подсвечивать незачем.
+    if (data.streak.current > before) {
+      notifySuccess();
+      toast(`Серия: ${data.streak.current} ${plural(data.streak.current)} подряд`);
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function plural(n) {
+  const tail = n % 100 >= 11 && n % 100 <= 14 ? 0 : n % 10;
+  return tail === 1 ? "день" : tail >= 2 && tail <= 4 ? "дня" : "дней";
 }
 
 /* ── Онбординг ───────────────────────────────────────────── */
@@ -161,8 +277,9 @@ function showBlocked() {
 }
 
 function enterApp() {
-  showScreen("s-scan");
+  showScreen("s-today");
   initTabs();
+  loadToday();
   loadGuides();
 }
 
@@ -256,6 +373,7 @@ async function runScan(rawFile) {
 
   try {
     const report = await request;
+    loadToday();
     $("scan-label").textContent = "Готово";
     $("scan-pct").textContent = "100%";
     await wait(380);

@@ -101,6 +101,22 @@ async def run(config: Config) -> None:
                     text="Приложение", web_app=WebAppInfo(url=config.webapp_url)
                 )
             )
+        # Локальный режим работает на polling, а он несовместим с вебхуком:
+        # Telegram разрешает что-то одно. Поэтому вебхук приходится снять —
+        # но это выключает бота, поднятого на Vercel, поэтому предупреждаем.
+        hook = await bot.get_webhook_info()
+        if hook.url:
+            logger.warning("=" * 70)
+            logger.warning("Снимаю вебхук %s", hook.url)
+            logger.warning(
+                "Бот на хостинге перестанет отвечать, пока работает эта копия."
+            )
+            logger.warning(
+                "Чтобы вернуть его: останови этот процесс и открой "
+                "<адрес приложения>/api/setup?key=<SETUP_KEY>"
+            )
+            logger.warning("=" * 70)
+
         await bot.delete_webhook(drop_pending_updates=True)
         await dispatcher.start_polling(bot)
     finally:

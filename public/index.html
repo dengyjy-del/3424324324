@@ -90,6 +90,60 @@
     </div>
   </section>
 
+  <!-- ══════════════ СЕГОДНЯ ══════════════ -->
+  <section class="screen" id="s-today">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Ежедневный режим</p>
+      <h1 style="margin-top:6px">Сегодня</h1>
+    </header>
+
+    <div class="glass streak-card">
+      <div class="streak-flame" id="td-flame">🔥</div>
+      <div>
+        <div class="numeral streak-num" id="td-streak">0</div>
+        <div class="streak-label" id="td-streak-label">дней подряд</div>
+      </div>
+      <div class="streak-side">
+        <div class="tiny">Лучшая серия</div>
+        <div class="numeral" id="td-best" style="font-size:19px">0</div>
+      </div>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px">
+      <div class="rank-row">
+        <span class="rank-emoji" id="td-rank-emoji">🌱</span>
+        <div style="flex:1;min-width:0">
+          <h2 id="td-rank-title">Старт</h2>
+          <p class="tiny" id="td-rank-caption">—</p>
+        </div>
+      </div>
+      <div class="rank-bar"><i id="td-rank-fill"></i></div>
+      <p class="tiny" id="td-rank-next" style="margin-top:7px"></p>
+    </div>
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:8px;display:flex;justify-content:space-between;align-items:baseline">
+        <p class="eyebrow">Привычки дня</p>
+        <span class="tiny" id="td-progress">0 / 5</span>
+      </div>
+      <div id="td-habits"></div>
+      <p class="tiny" id="td-need" style="padding:0 16px 15px"></p>
+    </div>
+
+    <div class="glass pad scan-quota" id="td-quota"></div>
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:10px">
+        <p class="eyebrow">Достижения</p>
+      </div>
+      <div class="ach-strip" id="td-achievements"></div>
+    </div>
+
+    <p class="disclaimer">
+      Серия не рвётся, если пропустил один день. Два подряд — начинаем заново.
+    </p>
+  </section>
+
   <!-- ══════════════ СКАН ══════════════ -->
   <section class="screen" id="s-scan">
     <header style="margin-bottom:18px">
@@ -246,7 +300,13 @@
   <!-- ══════════════ ТАБ-БАР ══════════════ -->
   <nav class="tabs" id="tabs">
     <div class="tab-pill" id="tab-pill"></div>
-    <button class="tab active" data-screen="s-scan">
+    <button class="tab active" data-screen="s-today">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3c.6 3 2.2 4.2 3.6 5.6A7.5 7.5 0 0 1 18 14a6 6 0 0 1-12 0c0-1.8.8-3.4 2-4.6 0 1.2.8 2.1 1.8 2.1 1.4 0 2.2-1.4 1.6-3.3-.5-1.7-.2-3.6.6-5.2z"/>
+      </svg>
+      Сегодня
+    </button>
+    <button class="tab" data-screen="s-scan">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>
         <circle cx="12" cy="12" r="3.2"/>

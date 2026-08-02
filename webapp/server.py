@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import engagement
 import rating
 from access import DemoState
 from config import Config, redact_secrets
@@ -124,6 +126,22 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
     ) -> dict:
         await _require_age(user.id)
 
+        # Суточный лимит: даёт причину вернуться завтра и заодно не
+        # превращает приложение в перепроверку своей оценки по десять раз
+        # за вечер. В режиме съёмки не действует.
+        in_demo_check = await demo.is_active(user.id)
+        if not in_demo_check:
+            used = await db.count_ratings_since(user.id, _day_start_iso())
+            if used >= config.daily_scan_limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"На сегодня отчёты закончились ({config.daily_scan_limit} "
+                        "в сутки). Новые будут доступны после полуночи — "
+                        "загляни отметить привычки."
+                    ),
+                )
+
         if photo.content_type not in ALLOWED_TYPES:
             raise HTTPException(
                 status_code=415, detail="Поддерживаются JPEG, PNG, WebP и HEIC"
@@ -139,7 +157,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         photo_id = hashlib.sha256(payload).hexdigest()[:32]
         del payload
 
-        in_demo = await demo.is_active(user.id)
+        in_demo = in_demo_check
         profile = rating.DEMO if in_demo else rating.NORMAL
         report = rating.generate_report(user.id, photo_id, config.score_salt, profile)
 
@@ -147,6 +165,29 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
             await db.save_rating(user.id, report.report_id, report.overall)
 
         return _report_payload(report, hide_id=in_demo)
+
+    @app.get("/api/today")
+    async def today(user: TelegramUser = Depends(current_user)) -> dict:
+        """Экран «Сегодня»: привычки, серия, ранг, остаток сканов."""
+        await db.ensure_user(user.id)
+        return await _today_payload(user.id)
+
+    @app.post("/api/habit")
+    async def toggle_habit(
+        key: str = Form(...), user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        await _require_age(user.id)
+
+        today_key = date.today().isoformat()
+        marks = await db.get_habits(user.id, today_key)
+
+        try:
+            updated = engagement.toggle(marks.get(today_key, 0), key)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        await db.set_habit_mask(user.id, today_key, updated)
+        return await _today_payload(user.id)
 
     @app.get("/api/profile")
     async def profile(user: TelegramUser = Depends(current_user)) -> dict:
@@ -176,6 +217,74 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         return {"guides": GUIDES}
 
     # ─────────────────────────── хелперы ───────────────────────────────
+
+    def _day_start_iso() -> str:
+        start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return start.isoformat(timespec="seconds")
+
+    async def _today_payload(user_id: int) -> dict:
+        today_date = date.today()
+        # Полугода истории хватает и для серии, и для рангов.
+        since = (today_date - timedelta(days=200)).isoformat()
+
+        marks = await db.get_habits(user_id, since)
+        streak = engagement.compute_streak(marks, today_date)
+        stats = await db.get_stats(user_id)
+        scans_total = stats.count if stats else 0
+
+        rank = engagement.rank_for(streak.total_days)
+        upcoming, days_left = engagement.next_rank(streak.total_days)
+        opened = engagement.unlocked(streak, scans_total)
+
+        used_today = await db.count_ratings_since(user_id, _day_start_iso())
+
+        return {
+            "date": today_date.isoformat(),
+            "habits": [
+                {
+                    "key": habit.key,
+                    "emoji": habit.emoji,
+                    "title": habit.title,
+                    "hint": habit.hint,
+                    "done": bool(marks.get(today_date.isoformat(), 0) & (1 << habit.bit)),
+                }
+                for habit in engagement.HABITS
+            ],
+            "done_today": engagement.count_done(marks.get(today_date.isoformat(), 0)),
+            "need_today": engagement.DAY_THRESHOLD,
+            "streak": {
+                "current": streak.current,
+                "best": streak.best,
+                "total_days": streak.total_days,
+                "perfect_days": streak.perfect_days,
+                "grace_used": streak.grace_used,
+            },
+            "rank": {
+                "emoji": rank.emoji,
+                "title": rank.title,
+                "caption": rank.caption,
+                "next": None
+                if upcoming is None
+                else {"title": upcoming.title, "emoji": upcoming.emoji, "days_left": days_left},
+            },
+            "scans": {
+                "used": used_today,
+                "limit": config.daily_scan_limit,
+                "left": max(0, config.daily_scan_limit - used_today),
+            },
+            "achievements": [
+                {
+                    "code": item.code,
+                    "emoji": item.emoji,
+                    "title": item.title,
+                    "description": item.description,
+                    "unlocked": opened.get(item.code, False),
+                }
+                for item in engagement.ACHIEVEMENTS
+            ],
+        }
 
     async def _require_age(user_id: int) -> None:
         age = await db.get_declared_age(user_id)

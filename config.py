@@ -37,6 +37,7 @@ class Config:
     webapp_host: str
     webapp_port: int
     min_age: int
+    daily_scan_limit: int
 
     @property
     def webapp_enabled(self) -> bool:
@@ -92,6 +93,23 @@ def _get_ids(name: str) -> tuple[int, ...]:
     return tuple(ids)
 
 
+def _missing_var(name: str, extra: str = "") -> str:
+    """Подсказка зависит от того, где запущен код: в Vercel .env не существует."""
+    if os.getenv("VERCEL"):
+        text = (
+            f"Не задана переменная {name}.\n"
+            "Добавь её в Vercel: проект → Settings → Environment Variables → "
+            "Add New. Отметь Production, Preview и Development, сохрани и "
+            "передеплой проект — переменные подхватываются только при сборке."
+        )
+    else:
+        text = (
+            f"Не задана переменная {name}.\n"
+            "Добавь её в файл .env рядом с bot.py."
+        )
+    return f"{text}\n{extra}" if extra else text
+
+
 def _database_url() -> str:
     """
     Vercel и хостинги Postgres кладут строку подключения в разные переменные.
@@ -118,10 +136,7 @@ def load_config() -> Config:
     token = (os.getenv("BOT_TOKEN") or "").strip()
     if not token:
         raise RuntimeError(
-            "Не задан BOT_TOKEN.\n"
-            "Создай файл .env рядом с bot.py и положи туда строку:\n"
-            "    BOT_TOKEN=123456:ABC-DEF...\n"
-            "Токен выдаёт @BotFather в Telegram."
+            _missing_var("BOT_TOKEN", "Токен выдаёт @BotFather в Telegram.")
         )
 
     channel_id = (os.getenv("CHANNEL_ID") or "").strip()
@@ -132,9 +147,12 @@ def load_config() -> Config:
             channel_url = f"https://t.me/{channel_id[1:]}"
         else:
             raise RuntimeError(
-                "CHANNEL_ID задан числом, значит нужен и CHANNEL_URL.\n"
-                "Пропиши в .env ссылку-приглашение канала, например:\n"
-                "    CHANNEL_URL=https://t.me/your_channel"
+                _missing_var(
+                    "CHANNEL_URL",
+                    "Она обязательна, потому что CHANNEL_ID задан числом. "
+                    "Укажи ссылку-приглашение канала (https://t.me/...) — либо "
+                    "впиши в CHANNEL_ID @username вместо числа.",
+                )
             )
 
     demo_code = (os.getenv("DEMO_CODE") or "").strip()
@@ -159,4 +177,5 @@ def load_config() -> Config:
         webapp_host=(os.getenv("WEBAPP_HOST") or "0.0.0.0").strip(),
         webapp_port=int(_get_float("WEBAPP_PORT", 8080)),
         min_age=int(_get_float("MIN_AGE", 16)),
+        daily_scan_limit=int(_get_float("DAILY_SCAN_LIMIT", 3)),
     )
