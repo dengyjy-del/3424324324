@@ -31,6 +31,8 @@ from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("looksmax.vercel")
 
+app = FastAPI()
+
 # Переменные, без которых приложение не поднимется или будет вести себя странно.
 REQUIRED_VARS = ("BOT_TOKEN",)
 RECOMMENDED_VARS = ("DATABASE_URL", "WEBHOOK_SECRET", "SETUP_KEY", "ADMIN_IDS")
