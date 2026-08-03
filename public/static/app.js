@@ -2,6 +2,8 @@
    LOOKSCORE — логика мини-аппа
    ============================================================ */
 
+import { analyseImage, drawMesh, detectorFailed } from "/static/facemesh.js";
+
 const tg = window.Telegram?.WebApp;
 const $ = (id) => document.getElementById(id);
 
@@ -10,6 +12,7 @@ const state = {
   period: "day",
   minAge: 16,
   streak: 0,
+  channel: { required: false, url: "", title: "" },
   guides: [],
 };
 
@@ -56,6 +59,11 @@ async function api(path, { method = "GET", body } = {}) {
     try {
       detail = (await response.json()).detail || "";
     } catch (_) {}
+
+    if (response.status === 403 && detail.includes("подписка")) {
+      showGate();
+      throw new Error("Нужна подписка на канал");
+    }
 
     if (!detail) {
       detail =
@@ -265,11 +273,60 @@ function buildAgeGrid() {
       const form = new FormData();
       form.append("age", String(chosen));
       const result = await api("/api/age", { method: "POST", body: form });
-      result.age_ok ? enterApp() : showBlocked();
+      if (!result.age_ok) {
+        showBlocked();
+        return;
+      }
+      const session = await api("/api/session", { method: "POST" });
+      session.subscribed ? enterApp() : showGate();
     } catch (error) {
       toast(error.message);
       button.disabled = false;
       button.textContent = "Сохранить";
+    }
+  });
+}
+
+function showGate() {
+  $("ob-step-1").classList.add("hidden");
+  $("ob-step-2").classList.add("hidden");
+  $("ob-blocked").classList.add("hidden");
+  $("ob-gate").classList.remove("hidden");
+  showScreen("s-onboard");
+  $("tabs").classList.remove("visible");
+  $("gate-channel").textContent = state.channel.title || "канала";
+}
+
+function initGate() {
+  $("gate-open").addEventListener("click", () => {
+    haptic("medium");
+    const url = state.channel.url;
+    if (!url) return toast("Ссылка на канал не настроена");
+    // openTelegramLink открывает канал внутри клиента, не выбрасывая в браузер
+    if (tg?.openTelegramLink) tg.openTelegramLink(url);
+    else window.open(url, "_blank");
+  });
+
+  $("gate-check").addEventListener("click", async () => {
+    haptic("medium");
+    const button = $("gate-check");
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner"></span>';
+
+    try {
+      const result = await api("/api/check-subscription", { method: "POST" });
+      if (result.subscribed) {
+        notifySuccess();
+        $("ob-gate").classList.add("hidden");
+        enterApp();
+      } else {
+        toast("Подписка не найдена. Подпишись и попробуй ещё раз.");
+      }
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Я подписался";
     }
   });
 }
@@ -291,10 +348,10 @@ function enterApp() {
 /* ── Скан ────────────────────────────────────────────────── */
 
 const SCAN_STAGES = [
-  ["Инициализация модуля", 8],
-  ["Поиск лицевых маркеров", 27],
-  ["Замер угловых характеристик", 51],
-  ["Оценка текстур и пропорций", 74],
+  ["Контур лица найден", 14],
+  ["Замер наклона глазной щели", 33],
+  ["Линия челюсти и ось симметрии", 55],
+  ["Пропорции третей лица", 76],
   ["Сборка отчёта", 93],
 ];
 
@@ -350,6 +407,29 @@ async function prepareImage(file, maxSide = 1280, quality = 0.85) {
   }
 }
 
+async function sha256(file) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Размеры и смещение картинки внутри превью при object-fit: cover. */
+function coverBox(image, canvas) {
+  const scale = Math.max(
+    canvas.width / image.naturalWidth,
+    canvas.height / image.naturalHeight
+  );
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  return {
+    drawWidth,
+    drawHeight,
+    offsetX: (canvas.width - drawWidth) / 2,
+    offsetY: (canvas.height - drawHeight) / 2,
+  };
+}
+
 async function runScan(rawFile) {
   const file = await prepareImage(rawFile);
 
@@ -359,24 +439,60 @@ async function runScan(rawFile) {
   }
 
   const url = URL.createObjectURL(file);
-  $("preview-img").src = url;
+  const image = $("preview-img");
+  image.src = url;
   setScanState("run");
-  requestAnimationFrame(() => $("calipers").classList.add("on"));
+  $("scan-label").textContent = "Ищу лицо";
+  $("scan-pct").textContent = "0%";
 
-  const form = new FormData();
-  form.append("photo", file, file.name || "photo.jpg");
-
-  // Запрос уходит сразу, анимация идёт параллельно — так ожидание
-  // ощущается работой, а не задержкой.
-  const request = api("/api/rate", { method: "POST", body: form });
-
-  for (const [label, percent] of SCAN_STAGES) {
-    $("scan-label").textContent = label;
-    $("scan-pct").textContent = `${percent}%`;
-    await wait(620);
-  }
+  const cleanup = () => {
+    URL.revokeObjectURL(url);
+    $("mesh").classList.remove("on");
+  };
 
   try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("Не удалось открыть фото"));
+    });
+
+    const found = await analyseImage(image);
+
+    // Разметка загрузилась, но лица нет — оценивать нечего.
+    if (!found && !detectorFailed()) {
+      toast("На фото не найдено лицо. Нужен снимок анфас, лицо целиком в кадре.");
+      setScanState("idle");
+      cleanup();
+      return;
+    }
+
+    const form = new FormData();
+    if (found) {
+      // Замеры уже посчитаны на устройстве, поэтому сам снимок не отправляем.
+      form.append("photo_hash", await sha256(file));
+      form.append("metrics", JSON.stringify(found.metrics));
+    } else {
+      form.append("photo", file, file.name || "photo.jpg");
+    }
+
+    const request = api("/api/rate", { method: "POST", body: form });
+
+    const canvas = $("mesh");
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * (window.devicePixelRatio || 1);
+    canvas.height = rect.height * (window.devicePixelRatio || 1);
+    const box = found ? coverBox(image, canvas) : null;
+
+    if (found) canvas.classList.add("on");
+
+    let step = 0;
+    for (const [label, percent] of SCAN_STAGES) {
+      $("scan-label").textContent = label;
+      $("scan-pct").textContent = `${percent}%`;
+      if (found) drawMesh(canvas, found.landmarks, box, ++step);
+      await wait(620);
+    }
+
     const report = await request;
     loadToday();
     $("scan-label").textContent = "Готово";
@@ -388,8 +504,7 @@ async function runScan(rawFile) {
     toast(error.message);
     setScanState("idle");
   } finally {
-    URL.revokeObjectURL(url);
-    $("calipers").classList.remove("on");
+    cleanup();
   }
 }
 
@@ -436,6 +551,17 @@ function renderReport(report) {
       `<span class="param-value">${score.value.toFixed(1)}</span>`;
     params.appendChild(row);
   });
+
+  const measurements = report.measurements || [];
+  $("res-measure-card").classList.toggle("hidden", measurements.length === 0);
+  $("res-measurements").innerHTML = measurements
+    .map(
+      (item) =>
+        `<div class="measure"><span class="measure-emoji">${item.emoji}</span>` +
+        `<span class="measure-title">${item.title}</span>` +
+        `<span class="measure-value">${item.value}</span></div>`
+    )
+    .join("");
 
   $("res-tips").innerHTML = report.tips
     .map(
@@ -713,6 +839,7 @@ async function boot() {
   }
 
   buildAgeGrid();
+  initGate();
   initScan();
   initSegments();
 
@@ -727,8 +854,12 @@ async function boot() {
     state.minAge = session.min_age;
     paintStats(session.stats, session.user);
 
+    state.channel = session.channel || state.channel;
+
     if (session.onboarded) {
-      session.age_ok ? enterApp() : showBlocked();
+      if (!session.age_ok) showBlocked();
+      else if (!session.subscribed) showGate();
+      else enterApp();
     }
   } catch (error) {
     toast(error.message);

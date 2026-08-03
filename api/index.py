@@ -96,12 +96,12 @@ try:
     demo = DemoState(db, config.demo_ttl_minutes)
     gate = SubscriptionGate(config.channel_id)
 
-    app = create_app(config, db, demo)
-
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    app = create_app(config, db, demo, gate, bot)
 
     dispatcher = Dispatcher()
     dispatcher["db"] = db
@@ -237,9 +237,31 @@ else:
         info = {
             "ok": True,
             "database": "postgres" if config.uses_postgres else "sqlite",
-            "channel_gate": bool(config.channel_id),
             "webapp_url": config.webapp_url,
+            "admin_ids_set": bool(config.admin_ids),
         }
+
+        # Гейт подписки — самая частая причина «почему не требует подписку».
+        channel = {"configured": bool(config.channel_id), "id": config.channel_id}
+        if config.channel_id:
+            try:
+                me = await bot.get_me()
+                member = await bot.get_chat_member(config.channel_id, me.id)
+                channel["bot_is_admin"] = member.status in ("administrator", "creator")
+                if not channel["bot_is_admin"]:
+                    channel["problem"] = (
+                        "Бот не администратор канала — проверка подписки "
+                        "невозможна, пользователи проходят без неё."
+                    )
+            except Exception as error:
+                channel["bot_is_admin"] = False
+                channel["problem"] = (
+                    f"{type(error).__name__}: {_redact(str(error))[:140]}"
+                )
+        else:
+            channel["problem"] = "CHANNEL_ID пуст — гейт выключен"
+
+        info["channel"] = channel
         try:
             await _ensure_ready()
             await db.ping()

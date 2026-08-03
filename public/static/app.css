@@ -507,24 +507,18 @@ h3 {
   }
 }
 
-/* Калиперные засечки — из мира замеров лица, а не generic-«ИИ» */
-.calipers {
+/* Сетка рисуется по реальным точкам лица, найденным на устройстве */
+.mesh {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   opacity: 0;
-  transition: opacity 0.6s var(--ease);
+  transition: opacity 0.5s var(--ease);
 }
 
-.calipers.on {
+.mesh.on {
   opacity: 1;
-}
-
-.calipers line,
-.calipers circle {
-  stroke: rgba(0, 224, 198, 0.75);
-  stroke-width: 1;
-  fill: none;
-  stroke-dasharray: 3 4;
 }
 
 .scan-status {
@@ -1149,4 +1143,26 @@ h3 {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+
+/* Строка замера */
+.measure {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.measure:last-child { border-bottom: none; }
+
+.measure-emoji { font-size: 15px; width: 22px; text-align: center; }
+.measure-title { flex: 1; font-size: 13.5px; color: var(--ink-2); }
+
+.measure-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 660;
+  font-size: 14.5px;
+  letter-spacing: -0.02em;
 }

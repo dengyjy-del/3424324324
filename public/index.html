@@ -66,6 +66,23 @@
         </div>
       </div>
 
+      <div id="ob-gate" class="hidden center">
+        <div class="mark" style="margin:0 auto">🔒</div>
+        <h1 style="margin-top:24px">Остался шаг</h1>
+        <p class="muted" style="margin-top:10px;font-size:15px;line-height:1.5">
+          Приложение открыто для подписчиков канала
+          <b id="gate-channel">канала</b>.
+        </p>
+        <div class="glass pad" style="margin-top:18px;text-align:left">
+          <p class="tiny">1. Нажми «Подписаться» — откроется канал</p>
+          <p class="tiny" style="margin-top:7px">2. Вернись сюда и нажми «Я подписался»</p>
+        </div>
+        <div class="stack" style="margin-top:20px">
+          <button class="btn btn-primary" id="gate-open">Подписаться</button>
+          <button class="btn btn-glass" id="gate-check">Я подписался</button>
+        </div>
+      </div>
+
       <div id="ob-blocked" class="hidden center">
         <div class="mark" style="margin:0 auto">🌱</div>
         <h1 style="margin-top:24px">Пока рано</h1>
@@ -179,13 +196,7 @@
       <div class="preview">
         <img id="preview-img" alt="">
         <div class="scanline"></div>
-        <svg class="calipers" id="calipers" viewBox="0 0 100 125" preserveAspectRatio="none">
-          <circle cx="50" cy="52" r="30"/>
-          <line x1="50" y1="10" x2="50" y2="115"/>
-          <line x1="12" y1="45" x2="88" y2="45"/>
-          <line x1="12" y1="68" x2="88" y2="68"/>
-          <line x1="20" y1="88" x2="80" y2="88"/>
-        </svg>
+        <canvas class="mesh" id="mesh"></canvas>
         <div class="scan-status">
           <span id="scan-label">Инициализация</span>
           <span class="scan-pct" id="scan-pct">0%</span>
@@ -217,6 +228,16 @@
           <p class="eyebrow">Детализация</p>
         </div>
         <div id="res-params"></div>
+      </div>
+
+      <div class="glass" style="margin-top:12px" id="res-measure-card">
+        <div class="pad" style="padding-bottom:8px">
+          <p class="eyebrow">Замеры</p>
+        </div>
+        <div id="res-measurements"></div>
+        <p class="tiny" style="padding:2px 16px 15px;color:var(--ink-3)">
+          Вычислено по 478 точкам лица на твоём устройстве. Снимок никуда не отправлялся.
+        </p>
       </div>
 
       <div class="glass pad" style="margin-top:12px">
@@ -332,6 +353,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="/static/app.js"></script>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>

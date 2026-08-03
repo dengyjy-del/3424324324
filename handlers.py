@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime, timedelta, timezone
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -61,6 +62,43 @@ async def cmd_stats(message: Message, db: Database) -> None:
 async def cmd_myid(message: Message) -> None:
     if message.from_user is not None:
         await message.answer(texts.whoami(message.from_user.id))
+
+
+@router.message(Command("audience"))
+async def cmd_audience(message: Message, db: Database, config: Config) -> None:
+    """Портрет аудитории. Только для ID из ADMIN_IDS."""
+    user = message.from_user
+    if user is None:
+        return
+    if not config.is_admin(user.id):
+        await message.answer(texts.NEED_PHOTO)
+        return
+
+    data = await db.audience()
+    await message.answer(
+        texts.audience_card(
+            data.total, data.declared, data.with_reports, data.by_age
+        )
+    )
+
+
+@router.message(Command("audience"))
+async def cmd_audience(message: Message, db: Database, config: Config) -> None:
+    """Сводка по аудитории. Только для ID из ADMIN_IDS."""
+    user = message.from_user
+    if user is None:
+        return
+
+    if not config.admin_ids or not config.is_admin(user.id):
+        await message.answer(
+            "🚫 Команда только для владельца.\n"
+            "Впиши свой ID (его покажет /myid) в переменную ADMIN_IDS."
+        )
+        return
+
+    days = 7
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    await message.answer(texts.audience(await db.audience(since), days))
 
 
 @router.message(Command("demo_off"))

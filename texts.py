@@ -291,3 +291,137 @@ def whoami(user_id: int) -> str:
         "<i>Впиши его в ADMIN_IDS в .env, чтобы закрыть режим съёмки "
         "от посторонних.</i>"
     )
+
+
+# ───────────────────────── портрет аудитории ───────────────────────────────
+
+AGE_GROUPS = (
+    ("13–15", 13, 15),
+    ("16–17", 16, 17),
+    ("18–20", 18, 20),
+    ("21–23", 21, 23),
+    ("24+", 24, 200),
+)
+
+
+def audience_card(total: int, declared: int, with_reports: int, by_age: dict) -> str:
+    if not by_age:
+        return (
+            "👥 <b>АУДИТОРИЯ</b>\n"
+            f"{LINE}\n"
+            f"Пользователей в базе: <b>{total}</b>\n"
+            "Возраст пока никто не указал."
+        )
+
+    groups = [
+        (label, sum(n for age, n in by_age.items() if low <= age <= high))
+        for label, low, high in AGE_GROUPS
+    ]
+    peak = max(count for _, count in groups) or 1
+
+    lines = [
+        "👥 <b>АУДИТОРИЯ</b>",
+        LINE,
+        f"Всего пользователей: <b>{total}</b>",
+        f"Указали возраст: <b>{declared}</b>",
+        f"Собрали хотя бы один отчёт: <b>{with_reports}</b>",
+        LINE,
+        "<b>ПО ВОЗРАСТУ</b>",
+    ]
+
+    for label, count in groups:
+        share = count / declared * 100 if declared else 0
+        bar = "█" * max(0, round(count / peak * 12))
+        lines.append(
+            f"<code>{label:>5} {bar:<12}</code> <b>{count}</b> <i>({share:.0f}%)</i>"
+        )
+
+    ordered = sorted(age for age, n in by_age.items() for _ in range(n))
+    median = ordered[len(ordered) // 2]
+    average = sum(ordered) / len(ordered)
+
+    lines += [
+        LINE,
+        f"Медиана: <b>{median}</b> лет · средний: <b>{average:.1f}</b>",
+        f"Диапазон: <b>{min(by_age)}–{max(by_age)}</b>",
+        "",
+        "<i>Возраст указывают сами пользователи при первом входе. "
+        "Данные агрегированные, привязки к конкретным людям нет.</i>",
+    ]
+    return "\n".join(lines)
+
+
+# ───────────────────────── аудитория (для владельца) ───────────────────────
+
+AGE_GROUPS = (
+    ("13–15", 13, 15),
+    ("16–17", 16, 17),
+    ("18–20", 18, 20),
+    ("21–23", 21, 23),
+    ("24+", 24, 200),
+)
+
+
+def _bar(value: int, peak: int, width: int = 12) -> str:
+    if peak <= 0:
+        return ""
+    return "█" * max(1, round(value / peak * width)) if value else ""
+
+
+def audience(data: dict, days: int) -> str:
+    ages: dict[int, int] = data["ages"]
+    total = data["total"]
+    with_age = data["with_age"]
+
+    if not ages:
+        return (
+            "👥 <b>АУДИТОРИЯ</b>\n"
+            f"{LINE}\n"
+            f"Пользователей: <b>{total}</b>\n"
+            "Возраст пока никто не указал."
+        )
+
+    # медиана по указанным возрастам
+    flat = sorted(age for age, count in ages.items() for _ in range(count))
+    median = flat[len(flat) // 2]
+    average = sum(flat) / len(flat)
+
+    groups = []
+    peak = 0
+    for label, low, high in AGE_GROUPS:
+        count = sum(n for age, n in ages.items() if low <= age <= high)
+        groups.append((label, count))
+        peak = max(peak, count)
+
+    lines = [
+        "👥 <b>АУДИТОРИЯ</b>",
+        LINE,
+        f"Всего в боте: <b>{total}</b>",
+        f"Указали возраст: <b>{with_age}</b>",
+        f"Собрали хотя бы отчёт: <b>{data['with_report']}</b>",
+        f"Активны за {days} дн.: <b>{data['active']}</b>",
+        LINE,
+        "<b>ВОЗРАСТНЫЕ ГРУППЫ</b>",
+    ]
+
+    for label, count in groups:
+        share = round(count / with_age * 100) if with_age else 0
+        lines.append(
+            f"<code>{label:<6}</code> {_bar(count, peak)} <b>{count}</b> ({share}%)"
+        )
+
+    minors = sum(n for age, n in ages.items() if age < 18)
+    lines += [
+        LINE,
+        f"Медиана: <b>{median}</b> лет · средний <b>{average:.1f}</b>",
+        f"Младше 18: <b>{round(minors / with_age * 100) if with_age else 0}%</b>",
+        LINE,
+        "<b>ПО ГОДАМ</b>",
+    ]
+
+    top = max(ages.values())
+    for age in sorted(ages):
+        lines.append(f"<code>{age:>3}</code> {_bar(ages[age], top)} {ages[age]}")
+
+    lines += ["", "<i>Возраст указывают сами пользователи при первом входе.</i>"]
+    return "\n".join(lines)

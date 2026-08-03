@@ -13,8 +13,10 @@ initData проверяется на каждом запросе, состоян
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
+import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -23,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 import engagement
 import rating
-from access import DemoState
+from access import DemoState, SubscriptionGate
 from config import Config, redact_secrets
 from database import BaseDatabase as Database
 from webapp.auth import AuthError, TelegramUser, verify_init_data
@@ -43,7 +45,13 @@ MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
-def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
+def create_app(
+    config: Config,
+    db: Database,
+    demo: DemoState,
+    gate: SubscriptionGate | None = None,
+    bot=None,
+) -> FastAPI:
     app = FastAPI(title="Looksmax Mini App", docs_url=None, redoc_url=None)
 
     @app.exception_handler(Exception)
@@ -108,6 +116,12 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
             "min_age": config.min_age,
             "brand": config.brand_name,
             "stats": _stats_payload(stats),
+            "subscribed": await _is_subscribed(user.id),
+            "channel": {
+                "required": bool(gate is not None and gate.enabled and bot is not None),
+                "url": config.channel_url,
+                "title": config.channel_title,
+            },
         }
 
     @app.post("/api/age")
@@ -120,11 +134,32 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         await db.set_declared_age(user.id, age)
         return {"age_ok": age >= config.min_age, "min_age": config.min_age}
 
+    @app.post("/api/check-subscription")
+    async def check_subscription(user: TelegramUser = Depends(current_user)) -> dict:
+        # Сбрасываем кеш, иначе кнопка не сработает сразу после подписки.
+        if gate is not None:
+            gate.forget(user.id)
+        return {"subscribed": await _is_subscribed(user.id)}
+
     @app.post("/api/rate")
     async def rate(
-        photo: UploadFile = File(...), user: TelegramUser = Depends(current_user)
+        photo: UploadFile | None = File(default=None),
+        photo_hash: str = Form(default=""),
+        metrics: str = Form(default=""),
+        user: TelegramUser = Depends(current_user),
     ) -> dict:
+        """
+        Два пути.
+
+        Основной: браузер сам нашёл лицо и посчитал геометрию — присылает
+        хеш снимка и замеры, само изображение никуда не уходит.
+
+        Запасной: разметка лиц не загрузилась (старое устройство, недоступен
+        CDN) — тогда как раньше принимаем файл. Ронять продукт из-за этого
+        нельзя, но и проверить наличие лица в этом случае невозможно.
+        """
         await _require_age(user.id)
+        await _require_subscription(user.id)
 
         # Суточный лимит: даёт причину вернуться завтра и заодно не
         # превращает приложение в перепроверку своей оценки по десять раз
@@ -143,29 +178,53 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
                     ),
                 )
 
-        if photo.content_type not in ALLOWED_TYPES:
-            raise HTTPException(
-                status_code=415, detail="Поддерживаются JPEG, PNG, WebP и HEIC"
-            )
-
-        payload = await photo.read(MAX_UPLOAD_BYTES + 1)
-        if len(payload) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Файл слишком большой")
-        if len(payload) < 1024:
-            raise HTTPException(status_code=400, detail="Файл повреждён или пуст")
-
-        # Единственное, что остаётся от снимка. Сами байты дальше не живут.
-        photo_id = hashlib.sha256(payload).hexdigest()[:32]
-        del payload
-
         in_demo = in_demo_check
         profile = rating.DEMO if in_demo else rating.NORMAL
-        report = rating.generate_report(user.id, photo_id, config.score_salt, profile)
+        face: rating.FaceMetrics | None = None
+
+        if metrics:
+            if not re.fullmatch(r"[0-9a-f]{16,64}", photo_hash or ""):
+                raise HTTPException(status_code=400, detail="Некорректный снимок")
+            try:
+                face = rating.FaceMetrics.from_payload(json.loads(metrics))
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Не удалось разобрать лицо. Попробуй другое фото.",
+                ) from None
+            photo_id = photo_hash[:32]
+        else:
+            if photo is None:
+                raise HTTPException(status_code=400, detail="Нужно фото")
+            if photo.content_type not in ALLOWED_TYPES:
+                raise HTTPException(
+                    status_code=415, detail="Поддерживаются JPEG, PNG, WebP и HEIC"
+                )
+
+            payload = await photo.read(MAX_UPLOAD_BYTES + 1)
+            if len(payload) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Файл слишком большой")
+            if len(payload) < 1024:
+                raise HTTPException(status_code=400, detail="Файл повреждён или пуст")
+
+            # Единственное, что остаётся от снимка. Байты дальше не живут.
+            photo_id = hashlib.sha256(payload).hexdigest()[:32]
+            del payload
+
+        report = (
+            rating.measured_report(user.id, photo_id, face, config.score_salt, profile)
+            if face is not None
+            else rating.generate_report(user.id, photo_id, config.score_salt, profile)
+        )
 
         if not in_demo:
             await db.save_rating(user.id, report.report_id, report.overall)
 
-        return _report_payload(report, hide_id=in_demo)
+        payload = _report_payload(report, hide_id=in_demo)
+        payload["measurements"] = (
+            rating.metrics_readout(face) if face is not None and not in_demo else []
+        )
+        return payload
 
     @app.get("/api/today")
     async def today(user: TelegramUser = Depends(current_user)) -> dict:
@@ -178,6 +237,7 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
         key: str = Form(...), user: TelegramUser = Depends(current_user)
     ) -> dict:
         await _require_age(user.id)
+        await _require_subscription(user.id)
 
         today_key = date.today().isoformat()
         marks = await db.get_habits(user.id, today_key)
@@ -288,6 +348,22 @@ def create_app(config: Config, db: Database, demo: DemoState) -> FastAPI:
                 for item in engagement.ACHIEVEMENTS
             ],
         }
+
+    async def _is_subscribed(user_id: int) -> bool:
+        """Гейт выключен, бот не передан или это админ — считаем подписанным."""
+        if gate is None or not gate.enabled or bot is None:
+            return True
+        if config.is_admin(user_id):
+            return True
+        return await gate.is_member(bot, user_id)
+
+    async def _require_subscription(user_id: int) -> None:
+        if not await _is_subscribed(user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Нужна подписка на канал",
+                headers={"X-Reason": "subscription"},
+            )
 
     async def _require_age(user_id: int) -> None:
         age = await db.get_declared_age(user_id)

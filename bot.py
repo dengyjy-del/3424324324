@@ -71,7 +71,8 @@ async def run(config: Config) -> None:
     dispatcher = Dispatcher()
     dispatcher["db"] = db
     dispatcher["config"] = config
-    dispatcher["gate"] = SubscriptionGate(config.channel_id)
+    gate = SubscriptionGate(config.channel_id)
+    dispatcher["gate"] = gate
     demo_state = DemoState(db, config.demo_ttl_minutes)
     dispatcher["demo"] = demo_state
 
@@ -85,7 +86,7 @@ async def run(config: Config) -> None:
 
     tasks = []
     if config.webapp_enabled:
-        tasks.append(asyncio.create_task(_serve_webapp(config, db, demo_state)))
+        tasks.append(asyncio.create_task(_serve_webapp(config, db, demo_state, gate, bot)))
         logger.info("Мини-апп: %s (порт %s)", config.webapp_url, config.webapp_port)
     else:
         logger.info("Мини-апп выключен (WEBAPP_URL пуст)")
@@ -127,7 +128,7 @@ async def run(config: Config) -> None:
         logger.info("Бот остановлен")
 
 
-async def _serve_webapp(config: Config, db, demo: DemoState) -> None:
+async def _serve_webapp(config: Config, db, demo: DemoState, gate, bot) -> None:
     """Мини-апп живёт в том же процессе и на том же event loop, что и бот."""
     import uvicorn
 
@@ -135,7 +136,7 @@ async def _serve_webapp(config: Config, db, demo: DemoState) -> None:
 
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(config, db, demo),
+            create_app(config, db, demo, gate, bot),
             host=config.webapp_host,
             port=config.webapp_port,
             log_level="warning",

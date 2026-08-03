@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -399,3 +400,168 @@ def pick_tip(report: Report, score: ParameterScore, salt: str = "looksmax") -> s
     payload = f"{salt}|tip|{report.report_id}|{score.parameter.key}".encode("utf-8")
     index = int(hashlib.md5(payload).hexdigest(), 16) % len(score.parameter.tips)
     return score.parameter.tips[index]
+
+
+# ═══════════════════════════ РЕАЛЬНЫЕ ЗАМЕРЫ ═══════════════════════════════
+#
+# Геометрию лица считает браузер по 478 точкам Face Mesh и присылает сюда
+# готовые числа — сам снимок на сервер по-прежнему не попадает.
+#
+# Здесь замеры превращаются в баллы. Каждый параметр оценивается по тому,
+# насколько измерение близко к диапазону, который в лицевой антропометрии
+# считается гармоничным. Это честнее «предсказания красоты» нейросетью:
+# такие модели обучены на оценках нескольких сотен людей и выдают вкусы
+# конкретной выборки за объективную истину.
+#
+# Нижняя граница держится на 3.0 осознанно.
+
+MEASURED_MIN = 3.0
+MEASURED_MAX = 9.2
+
+
+@dataclass
+class FaceMetrics:
+    """Замеры, пришедшие из браузера. Все величины безразмерные или в °."""
+
+    canthal_tilt: float       # наклон глазной щели, градусы
+    eye_aspect: float         # высота глазной щели / ширина
+    symmetry: float           # 0..1, зеркальное совпадение половин
+    thirds_balance: float     # 0..1, равенство верхней/средней/нижней третей
+    fwhr: float               # ширина лица / высота средней зоны
+    jaw_ratio: float          # ширина челюсти / ширина скул
+    gonial_angle: float       # угол нижней челюсти, градусы
+    chin_ratio: float         # высота нижней трети / высота лица
+    nose_ratio: float         # ширина носа / ширина лица
+
+    @classmethod
+    def from_payload(cls, data: dict) -> "FaceMetrics":
+        def number(key: str, low: float, high: float) -> float:
+            try:
+                value = float(data[key])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(f"нет замера {key}") from error
+            if value != value or not low <= value <= high:
+                raise ValueError(f"замер {key} вне допустимого диапазона")
+            return value
+
+        return cls(
+            canthal_tilt=number("canthal_tilt", -25, 25),
+            eye_aspect=number("eye_aspect", 0.05, 1.2),
+            symmetry=number("symmetry", 0.0, 1.0),
+            thirds_balance=number("thirds_balance", 0.0, 1.0),
+            fwhr=number("fwhr", 0.8, 3.2),
+            jaw_ratio=number("jaw_ratio", 0.3, 1.4),
+            gonial_angle=number("gonial_angle", 80, 175),
+            chin_ratio=number("chin_ratio", 0.15, 0.6),
+            nose_ratio=number("nose_ratio", 0.15, 0.7),
+        )
+
+
+def _closeness(value: float, ideal: float, tolerance: float) -> float:
+    """1.0 при точном попадании, 0.0 на границе допуска и дальше."""
+    return _clamp(1.0 - abs(value - ideal) / tolerance, 0.0, 1.0)
+
+
+def _bell(value: float, center: float, sigma: float) -> float:
+    """
+    Колокол: 1.0 в центре, плавный спад в обе стороны.
+
+    Раньше здесь было плато («всё внутри диапазона — максимум»), но тогда
+    подавляющее большинство лиц упиралось в потолок и продукт переставал
+    различать людей вообще. Гладкая кривая даёт настоящий разброс.
+    """
+    return math.exp(-0.5 * ((value - center) / sigma) ** 2)
+
+
+# Степень сжимает верх шкалы. Без неё почти любое лицо, попадающее в
+# анатомическую норму, упиралось в 8-9, и высокий балл переставал что-либо
+# значить. Подобрана так, чтобы типичное лицо давало около 6, а верхние
+# оценки доставались действительно редким сочетаниям пропорций.
+SCORE_GAMMA = 2.25
+
+
+def _to_score(quality: float) -> float:
+    """Качество 0..1 → балл в рабочем коридоре."""
+    shaped = _clamp(quality, 0.0, 1.0) ** SCORE_GAMMA
+    return MEASURED_MIN + shaped * (MEASURED_MAX - MEASURED_MIN)
+
+
+# Для каждого параметра — как получить качество 0..1 из замеров.
+# Качество кожи геометрией не измеряется, поэтому считается отдельно.
+# Допуски намеренно широкие. Способ замера здесь свой (точки Face Mesh, а не
+# цефалометрические ориентиры), поэтому абсолютные величины могут
+# систематически отличаться от литературных. Узкие коридоры в такой ситуации
+# загнали бы в нижний балл всех подряд — а это ровно то, чего не должно
+# случаться с продуктом для подростков.
+QUALITY_RULES = {
+    "canthal_tilt": lambda m: _bell(m.canthal_tilt, 6.5, 8.0),
+    "hunter_eyes": lambda m: _bell(m.eye_aspect, 0.35, 0.11),
+    "jawline": lambda m: _bell(m.jaw_ratio, 0.78, 0.12),
+    "gonial_angle": lambda m: _bell(m.gonial_angle, 128.0, 20.0),
+    "cheekbones": lambda m: _bell(m.fwhr, 1.95, 0.36),
+    "chin": lambda m: _bell(m.chin_ratio, 0.34, 0.062),
+    "nose": lambda m: _bell(m.nose_ratio, 0.26, 0.068),
+    "symmetry": lambda m: _clamp((m.symmetry - 0.90) / 0.085, 0.0, 1.0),
+    "proportions": lambda m: _clamp(m.thirds_balance, 0.0, 1.0),
+}
+
+
+def measured_report(
+    user_id: int,
+    photo_id: str,
+    metrics: FaceMetrics,
+    salt: str = "looksmax",
+    profile: ScoreProfile = NORMAL,
+) -> Report:
+    """
+    Отчёт по реальным замерам.
+
+    В режиме съёмки (profile=DEMO) замеры игнорируются: там нужны заранее
+    известные низкие числа для роликов.
+    """
+    if profile.key == DEMO.key:
+        return generate_report(user_id, photo_id, salt, profile)
+
+    rng = _make_rng(salt, user_id, photo_id, "measured")
+    scores: list[ParameterScore] = []
+
+    for parameter in PARAMETERS:
+        rule = QUALITY_RULES.get(parameter.key)
+        if rule is None:
+            # Кожа: геометрия о ней ничего не говорит, поэтому балл
+            # детерминирован снимком и держится около середины коридора.
+            value = _clamp(rng.gauss(6.1, 0.9), MEASURED_MIN, MEASURED_MAX)
+        else:
+            # Небольшой разброс убирает одинаковые значения у похожих лиц,
+            # оставаясь стабильным для одного и того же снимка.
+            quality = _clamp(rule(metrics) + rng.gauss(0.0, 0.05), 0.0, 1.0)
+            value = _to_score(quality)
+
+        scores.append(ParameterScore(parameter, round(value, 1)))
+
+    overall = round(
+        _clamp(sum(s.value for s in scores) / len(scores), MEASURED_MIN, MEASURED_MAX), 1
+    )
+
+    return Report(
+        report_id=_report_id(salt, user_id, photo_id, "measured"),
+        overall=overall,
+        potential=round(min(9.6, overall + rng.uniform(1.0, 2.2)), 1),
+        percentile=_percentile(overall),
+        tier=tier_for(overall),
+        scores=scores,
+    )
+
+
+def metrics_readout(metrics: FaceMetrics) -> list[dict]:
+    """Замеры для показа пользователю — как числа, а не как баллы."""
+    return [
+        {"emoji": "👁", "title": "Канторальный наклон", "value": f"{metrics.canthal_tilt:+.1f}°"},
+        {"emoji": "📐", "title": "Гониальный угол", "value": f"{metrics.gonial_angle:.0f}°"},
+        {"emoji": "⚖️", "title": "Симметрия", "value": f"{metrics.symmetry * 100:.0f}%"},
+        {"emoji": "📊", "title": "Баланс третей", "value": f"{metrics.thirds_balance * 100:.0f}%"},
+        {"emoji": "💎", "title": "Отношение ширины к высоте", "value": f"{metrics.fwhr:.2f}"},
+        {"emoji": "🗿", "title": "Челюсть к скулам", "value": f"{metrics.jaw_ratio:.2f}"},
+        {"emoji": "🦅", "title": "Раскрытие глаз", "value": f"{metrics.eye_aspect:.2f}"},
+        {"emoji": "🔻", "title": "Ширина носа", "value": f"{metrics.nose_ratio:.2f}"},
+    ]

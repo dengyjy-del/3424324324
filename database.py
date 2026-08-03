@@ -34,6 +34,14 @@ class UserStats:
 
 
 @dataclass
+class Audience:
+    total: int            # всего пользователей в базе
+    declared: int         # указали возраст
+    with_reports: int     # собрали хотя бы один отчёт
+    by_age: dict[int, int]
+
+
+@dataclass
 class HistoryPoint:
     label: str      # ключ периода: 2026-08-02 / 2026-W31 / 2026-08
     value: float    # средний балл за период
@@ -102,11 +110,19 @@ class BaseDatabase(ABC):
         """True, если этот альбом видим впервые."""
 
     @abstractmethod
+    async def audience(self) -> Audience:
+        """Агрегированный портрет аудитории: только суммы, без привязки к людям."""
+
+    @abstractmethod
     async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
         """Отметки привычек по дням, начиная с даты since (YYYY-MM-DD)."""
 
     @abstractmethod
     async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None: ...
+
+    @abstractmethod
+    async def audience(self, active_since: datetime) -> dict:
+        """Сводка по аудитории: всего, с возрастом, активные, гистограмма лет."""
 
     @abstractmethod
     async def count_ratings_since(self, user_id: int, since: datetime) -> int:
@@ -339,6 +355,29 @@ class SQLiteDatabase(BaseDatabase):
         await self.conn.commit()
         return cursor.rowcount > 0
 
+    async def audience(self) -> Audience:
+        async def scalar(sql: str) -> int:
+            async with self.conn.execute(sql) as cursor:
+                row = await cursor.fetchone()
+            return int(row["n"]) if row else 0
+
+        total = await scalar("SELECT COUNT(*) AS n FROM users")
+        with_reports = await scalar(
+            "SELECT COUNT(*) AS n FROM users WHERE ratings_count > 0"
+        )
+
+        async with self.conn.execute(
+            """
+              SELECT declared_age AS age, COUNT(*) AS n
+                FROM users WHERE declared_age IS NOT NULL
+            GROUP BY declared_age ORDER BY declared_age
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        by_age = {int(row["age"]): int(row["n"]) for row in rows}
+        return Audience(total, sum(by_age.values()), with_reports, by_age)
+
     async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
         async with self.conn.execute(
             "SELECT day, mask FROM habits WHERE user_id = ? AND day >= ?",
@@ -357,6 +396,41 @@ class SQLiteDatabase(BaseDatabase):
             (user_id, day, mask),
         )
         await self.conn.commit()
+
+    async def audience(self, active_since: datetime) -> dict:
+        moment = active_since.isoformat(timespec="seconds")
+        async with self.conn.execute(
+            """
+            SELECT COUNT(*)                                          AS total,
+                   SUM(declared_age IS NOT NULL)                     AS with_age,
+                   SUM(ratings_count > 0)                            AS with_report
+              FROM users
+            """
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        async with self.conn.execute(
+            """
+              SELECT declared_age AS age, COUNT(*) AS n
+                FROM users WHERE declared_age IS NOT NULL
+            GROUP BY declared_age ORDER BY declared_age
+            """
+        ) as cursor:
+            ages = {int(r["age"]): int(r["n"]) for r in await cursor.fetchall()}
+
+        async with self.conn.execute(
+            "SELECT COUNT(DISTINCT user_id) AS n FROM ratings WHERE created_at >= ?",
+            (moment,),
+        ) as cursor:
+            active = int((await cursor.fetchone())["n"])
+
+        return {
+            "total": int(row["total"] or 0),
+            "with_age": int(row["with_age"] or 0),
+            "with_report": int(row["with_report"] or 0),
+            "active": active,
+            "ages": ages,
+        }
 
     async def count_ratings_since(self, user_id: int, since: datetime) -> int:
         # В SQLite created_at хранится строкой ISO, поэтому приводим сами.
@@ -614,6 +688,25 @@ class PostgresDatabase(BaseDatabase):
             )
         return claimed is not None
 
+    async def audience(self) -> Audience:
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval("SELECT COUNT(*) FROM users")
+            with_reports = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE ratings_count > 0"
+            )
+            rows = await conn.fetch(
+                """
+                  SELECT declared_age AS age, COUNT(*) AS n
+                    FROM users WHERE declared_age IS NOT NULL
+                GROUP BY declared_age ORDER BY declared_age
+                """
+            )
+
+        by_age = {int(row["age"]): int(row["n"]) for row in rows}
+        return Audience(
+            int(total or 0), sum(by_age.values()), int(with_reports or 0), by_age
+        )
+
     async def get_habits(self, user_id: int, since: str) -> dict[str, int]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
@@ -635,6 +728,36 @@ class PostgresDatabase(BaseDatabase):
                 day,
                 mask,
             )
+
+    async def audience(self, active_since: datetime) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*)                                        AS total,
+                       COUNT(declared_age)                             AS with_age,
+                       COUNT(*) FILTER (WHERE ratings_count > 0)       AS with_report
+                  FROM users
+                """
+            )
+            age_rows = await conn.fetch(
+                """
+                  SELECT declared_age AS age, COUNT(*) AS n
+                    FROM users WHERE declared_age IS NOT NULL
+                GROUP BY declared_age ORDER BY declared_age
+                """
+            )
+            active = await conn.fetchval(
+                "SELECT COUNT(DISTINCT user_id) FROM ratings WHERE created_at >= $1",
+                active_since,
+            )
+
+        return {
+            "total": int(row["total"] or 0),
+            "with_age": int(row["with_age"] or 0),
+            "with_report": int(row["with_report"] or 0),
+            "active": int(active or 0),
+            "ages": {int(r["age"]): int(r["n"]) for r in age_rows},
+        }
 
     async def count_ratings_since(self, user_id: int, since: datetime) -> int:
         async with self.pool.acquire() as conn:
