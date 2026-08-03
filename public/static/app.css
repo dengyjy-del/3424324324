@@ -1166,3 +1166,127 @@ h3 {
   font-size: 14.5px;
   letter-spacing: -0.02em;
 }
+
+/* ── Кнопка «Поделиться» ─────────────────────────────────── */
+
+.share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 11px 22px;
+  border-radius: 100px;
+  border: 1px solid var(--stroke);
+  background: var(--glass-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.26s var(--spring), background 0.22s;
+}
+
+.share-btn svg { width: 16px; height: 16px; }
+.share-btn:active { transform: scale(0.94); background: rgba(255, 255, 255, 0.12); }
+
+/* ── Шторка ──────────────────────────────────────────────── */
+
+.sheet-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(4, 5, 9, 0.66);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.34s var(--ease), visibility 0.34s;
+}
+
+.sheet-veil.open { opacity: 1; visibility: visible; }
+
+.sheet {
+  position: fixed;
+  z-index: 71;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 18px);
+  background: rgba(14, 16, 24, 0.94);
+  border-top: 1px solid var(--stroke);
+  border-radius: 28px 28px 0 0;
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  transform: translateY(102%);
+  visibility: hidden;
+  transition: transform 0.46s var(--ease), visibility 0.46s;
+}
+
+.sheet.open { transform: none; visibility: visible; }
+
+.sheet-grip {
+  width: 38px;
+  height: 4px;
+  margin: 0 auto 14px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sheet-head { text-align: center; margin-bottom: 14px; }
+.sheet-head .tiny { margin-top: 3px; }
+
+/* Слайдер карточек */
+.card-rail {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 4px 0 6px;
+  /* Края подрезаются, чтобы было видно: рядом есть ещё карточки */
+  margin: 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.card-slide {
+  flex: 0 0 auto;
+  width: 63%;
+  max-width: 260px;
+  aspect-ratio: 3 / 4;
+  scroll-snap-align: center;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: #07080d;
+  transition: transform 0.4s var(--ease), opacity 0.4s var(--ease);
+  opacity: 0.45;
+  transform: scale(0.93);
+}
+
+.card-slide.active { opacity: 1; transform: none; }
+.card-slide canvas { width: 100%; height: 100%; display: block; }
+
+.card-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px 0 16px;
+}
+
+.card-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  transition: width 0.35s var(--spring), background 0.35s;
+}
+
+.card-dots i.on {
+  width: 20px;
+  border-radius: 100px;
+  background: linear-gradient(90deg, var(--aura-indigo), var(--aura-rose));
+}
+
+.sheet-actions { display: flex; flex-direction: column; gap: 9px; }

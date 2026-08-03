@@ -3,6 +3,7 @@
    ============================================================ */
 
 import { analyseImage, drawMesh, detectorFailed } from "/static/facemesh.js";
+import { renderCard, cardData, availableThemes, toBlob } from "/static/sharecard.js";
 
 const tg = window.Telegram?.WebApp;
 const $ = (id) => document.getElementById(id);
@@ -13,6 +14,10 @@ const state = {
   minAge: 16,
   streak: 0,
   channel: { required: false, url: "", title: "" },
+  brand: "LOOKSCORE",
+  botUsername: "",
+  report: null,
+  cardTheme: 0,
   guides: [],
 };
 
@@ -522,6 +527,7 @@ function countUp(element, target, duration = 1300) {
 
 function renderReport(report) {
   setScanState("result");
+  state.report = report;
 
   const circumference = 2 * Math.PI * 94;
   const ring = $("ring-value");
@@ -594,6 +600,130 @@ function initScan() {
     haptic();
     setScanState("idle");
   });
+}
+
+/* ── Карточка «поделиться» ───────────────────────────────── */
+
+function closeSheet() {
+  $("sheet").classList.remove("open");
+  $("sheet-veil").classList.remove("open");
+}
+
+function markActiveSlide(index) {
+  state.cardTheme = index;
+  document.querySelectorAll(".card-slide").forEach((slide, i) =>
+    slide.classList.toggle("active", i === index)
+  );
+  document.querySelectorAll("#card-dots i").forEach((dot, i) =>
+    dot.classList.toggle("on", i === index)
+  );
+}
+
+function openSheet() {
+  const report = state.report;
+  if (!report) return;
+
+  haptic("medium");
+  const themes = availableThemes(report);
+  const data = cardData(report, state.brand, state.botUsername);
+
+  const rail = $("card-rail");
+  rail.innerHTML = "";
+  themes.forEach((theme, index) => {
+    const slide = document.createElement("div");
+    slide.className = `card-slide${index === 0 ? " active" : ""}`;
+    const canvas = document.createElement("canvas");
+    slide.appendChild(canvas);
+    rail.appendChild(slide);
+    renderCard(canvas, theme.id, data);
+    slide.addEventListener("click", () =>
+      slide.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" })
+    );
+  });
+
+  $("card-dots").innerHTML = themes
+    .map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`)
+    .join("");
+
+  state.cardTheme = 0;
+  rail.scrollLeft = 0;
+  $("sheet-veil").classList.add("open");
+  $("sheet").classList.add("open");
+}
+
+/** Определяет карточку по центру видимой области. */
+function trackRail() {
+  const rail = $("card-rail");
+  let timer;
+  rail.addEventListener("scroll", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const middle = rail.scrollLeft + rail.clientWidth / 2;
+      const slides = [...rail.children];
+      let nearest = 0;
+      let best = Infinity;
+      slides.forEach((slide, i) => {
+        const center = slide.offsetLeft + slide.offsetWidth / 2 - rail.offsetLeft;
+        const gap = Math.abs(center - middle);
+        if (gap < best) {
+          best = gap;
+          nearest = i;
+        }
+      });
+      if (nearest !== state.cardTheme) {
+        haptic();
+        markActiveSlide(nearest);
+      }
+    }, 90);
+  });
+}
+
+function currentCanvas() {
+  return document.querySelectorAll(".card-slide canvas")[state.cardTheme];
+}
+
+async function shareCard() {
+  const canvas = currentCanvas();
+  if (!canvas) return;
+
+  haptic("medium");
+  const blob = await toBlob(canvas);
+  const file = new File([blob], "lookscore.png", { type: "image/png" });
+  const caption = `Мой результат в ${state.brand} ${state.botUsername}`;
+
+  // Web Share умеет отдавать файл прямо в мессенджеры. Если он недоступен
+  // (старый WebView), остаётся сохранение картинки.
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], text: caption });
+      closeSheet();
+    } catch (error) {
+      if (error.name !== "AbortError") saveCard();
+    }
+    return;
+  }
+
+  saveCard();
+}
+
+function saveCard() {
+  const canvas = currentCanvas();
+  if (!canvas) return;
+
+  haptic();
+  const link = document.createElement("a");
+  link.download = "lookscore.png";
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+  toast("Карточка сохранена — теперь её можно отправить куда угодно");
+}
+
+function initShare() {
+  $("share-open").addEventListener("click", openSheet);
+  $("sheet-veil").addEventListener("click", closeSheet);
+  $("share-send").addEventListener("click", shareCard);
+  $("share-save").addEventListener("click", saveCard);
+  trackRail();
 }
 
 /* ── Профиль ─────────────────────────────────────────────── */
@@ -840,6 +970,7 @@ async function boot() {
 
   buildAgeGrid();
   initGate();
+  initShare();
   initScan();
   initSegments();
 
@@ -855,6 +986,8 @@ async function boot() {
     paintStats(session.stats, session.user);
 
     state.channel = session.channel || state.channel;
+    state.brand = session.brand || state.brand;
+    state.botUsername = session.bot_username || "";
 
     if (session.onboarded) {
       if (!session.age_ok) showBlocked();

@@ -220,6 +220,14 @@
         <div class="center">
           <div class="tier-chip" id="res-tier"></div>
           <p class="tiny" style="margin-top:12px" id="res-percentile"></p>
+          <button class="share-btn" id="share-open">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v13M12 3l-4 4M12 3l4 4"/>
+              <path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14"/>
+            </svg>
+            Поделиться
+          </button>
         </div>
       </div>
 
@@ -350,6 +358,22 @@
     </button>
   </nav>
 
+</div>
+
+<!-- Шторка «поделиться» -->
+<div class="sheet-veil" id="sheet-veil"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-grip"></div>
+  <div class="sheet-head">
+    <h2>Карточка результата</h2>
+    <p class="tiny">Пролистай — выбери оформление</p>
+  </div>
+  <div class="card-rail" id="card-rail"></div>
+  <div class="card-dots" id="card-dots"></div>
+  <div class="sheet-actions">
+    <button class="btn btn-primary" id="share-send">Отправить</button>
+    <button class="btn btn-glass" id="share-save">Сохранить в галерею</button>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>

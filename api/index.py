@@ -234,8 +234,15 @@ else:
     @app.get("/api/health")
     async def health() -> JSONResponse:
         """Проверка живости: отвечает ли база и как настроен проект."""
+        try:
+            me = await bot.get_me()
+            bot_name = f"@{me.username}"
+        except Exception:  # noqa: BLE001 — имя не критично для проверки
+            bot_name = "не удалось определить"
+
         info = {
             "ok": True,
+            "bot": bot_name,
             "database": "postgres" if config.uses_postgres else "sqlite",
             "webapp_url": config.webapp_url,
             "admin_ids_set": bool(config.admin_ids),

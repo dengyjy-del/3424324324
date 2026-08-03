@@ -70,6 +70,19 @@ def create_app(
             },
         )
 
+    # Имя бота, чей токен настроен. Нужно, чтобы в ошибке подписи сразу было
+    # видно, через какого бота приложение обязано открываться.
+    bot_name_cache: dict[str, str] = {}
+
+    async def configured_bot_name() -> str:
+        if "name" not in bot_name_cache and bot is not None:
+            try:
+                me = await bot.get_me()
+                bot_name_cache["name"] = f"@{me.username}"
+            except Exception:  # noqa: BLE001 — имя не критично
+                bot_name_cache["name"] = ""
+        return bot_name_cache.get("name", "")
+
     # ─────────────────────────── авторизация ───────────────────────────
 
     async def current_user(
@@ -80,7 +93,14 @@ def create_app(
         try:
             return verify_init_data(init_data, config.bot_token)
         except AuthError as error:
-            raise HTTPException(status_code=401, detail=str(error)) from error
+            detail = str(error)
+            name = await configured_bot_name()
+            if name and "подпись" in detail.lower():
+                detail = (
+                    f"{detail} Сейчас на сервере настроен бот {name} — "
+                    "открывай приложение через него."
+                )
+            raise HTTPException(status_code=401, detail=detail) from error
 
     # ──────────────────────────── страницы ─────────────────────────────
 
@@ -115,6 +135,9 @@ def create_app(
             "age_ok": age is not None and age >= config.min_age,
             "min_age": config.min_age,
             "brand": config.brand_name,
+            # Нужен для карточки «поделиться»: подпись не зашита в код,
+            # поэтому при смене бота ничего править не придётся.
+            "bot_username": await configured_bot_name(),
             "stats": _stats_payload(stats),
             "subscribed": await _is_subscribed(user.id),
             "channel": {
