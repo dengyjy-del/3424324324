@@ -275,12 +275,12 @@ PARAMETERS: tuple[Parameter, ...] = (
 # Пороги опущены вслед за сжатием верха шкалы: иначе верхние тиры стали бы
 # недостижимы, а почти все попадали бы в LTN.
 TIERS: tuple[Tier, ...] = (
-    Tier(7.5, "🌟", "Gigachad", "запредельный тир", "Статистическая аномалия."),
-    Tier(6.9, "👑", "Chad", "верхний тир", "Заметен в любой комнате."),
-    Tier(6.2, "🔶", "Chadlite", "выше среднего+", "До верхнего тира — рукой подать."),
-    Tier(5.4, "🔷", "HTN", "High Tier Normie", "Сильная база, есть что докрутить."),
-    Tier(4.4, "🔹", "MTN", "Mid Tier Normie", "Рабочая база и приличный запас роста."),
-    Tier(3.4, "🌱", "LTN", "Low Tier Normie", "Всё решает уход и режим."),
+    Tier(7.0, "🌟", "Gigachad", "запредельный тир", "Статистическая аномалия."),
+    Tier(6.4, "👑", "Chad", "верхний тир", "Заметен в любой комнате."),
+    Tier(5.7, "🔶", "Chadlite", "выше среднего+", "До верхнего тира — рукой подать."),
+    Tier(4.9, "🔷", "HTN", "High Tier Normie", "Сильная база, есть что докрутить."),
+    Tier(3.9, "🔹", "MTN", "Mid Tier Normie", "Рабочая база и приличный запас роста."),
+    Tier(3.0, "🌱", "LTN", "Low Tier Normie", "Всё решает уход и режим."),
     Tier(0.0, "🍂", "Sub-LTN", "нижний тир", "Стартовая точка. Дальше только вверх."),
 )
 
@@ -419,7 +419,7 @@ def pick_tip(report: Report, score: ParameterScore, salt: str = "looksmax") -> s
 #
 # Нижняя граница держится на 3.0 осознанно.
 
-MEASURED_MIN = 3.0
+MEASURED_MIN = 2.0
 MEASURED_MAX = 9.2
 
 
@@ -568,11 +568,11 @@ MODEL_INTERCEPT = 6.383636
 MODEL_PIVOT = 6.3836
 MODEL_LOW = 2.0
 MODEL_HIGH = 1.2
-MODEL_SHIFT = 0.7
+MODEL_SHIFT = -0.2
 
 # Сжатие верхней части: якорь и коэффициент
 TOP_ANCHOR = 4.0
-TOP_SQUEEZE = 0.65
+TOP_SQUEEZE = 0.62
 
 
 def model_score(metrics: "FaceMetrics") -> float:
