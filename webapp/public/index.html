@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#07080d">
+<title>LOOKSCORE</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<div class="aura"><i></i><i></i><i></i></div>
+<div class="grain"></div>
+
+<!-- Градиент для кольца результата -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#5b4bff"/>
+      <stop offset="55%"  stop-color="#ff3d71"/>
+      <stop offset="100%" stop-color="#00e0c6"/>
+    </linearGradient>
+    <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#5b4bff" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#5b4bff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div class="shell">
+
+  <!-- ══════════════ ОНБОРДИНГ ══════════════ -->
+  <section class="screen active" id="s-onboard">
+    <div class="onboard">
+
+      <div id="ob-step-1">
+        <div class="mark">🧬</div>
+        <div style="margin-top:26px">
+          <p class="eyebrow">Анализ лицевой эстетики</p>
+          <h1 style="margin-top:8px">LOOKSCORE</h1>
+          <p class="muted" style="margin-top:12px;font-size:15.5px;line-height:1.5">
+            Разбор по 10 параметрам, история отчётов и гайды по тому, что
+            действительно меняет внешность.
+          </p>
+        </div>
+        <div class="stack" style="margin-top:30px">
+          <button class="btn btn-primary" id="ob-next">Продолжить</button>
+        </div>
+        <p class="disclaimer" style="padding-bottom:0">
+          Вход через Telegram — без почты и паролей. Мы не получаем и не храним
+          твой email.
+        </p>
+      </div>
+
+      <div id="ob-step-2" class="hidden">
+        <p class="eyebrow">Шаг 2 из 2</p>
+        <h1 style="margin-top:8px">Сколько тебе лет?</h1>
+        <p class="muted" style="margin-top:10px;font-size:14.5px">
+          Нужно один раз. От возраста зависит, что мы показываем и какие гайды
+          открыты.
+        </p>
+        <div class="age-grid" id="age-grid" style="margin-top:22px"></div>
+        <div class="stack" style="margin-top:22px">
+          <button class="btn btn-primary" id="age-save" disabled>Сохранить</button>
+        </div>
+      </div>
+
+      <div id="ob-gate" class="hidden center">
+        <div class="mark" style="margin:0 auto">🔒</div>
+        <h1 style="margin-top:24px">Остался шаг</h1>
+        <p class="muted" style="margin-top:10px;font-size:15px;line-height:1.5">
+          Приложение открыто для подписчиков канала
+          <b id="gate-channel">канала</b>.
+        </p>
+        <div class="glass pad" style="margin-top:18px;text-align:left">
+          <p class="tiny">1. Нажми «Подписаться» — откроется канал</p>
+          <p class="tiny" style="margin-top:7px">2. Вернись сюда и нажми «Я подписался»</p>
+        </div>
+        <div class="stack" style="margin-top:20px">
+          <button class="btn btn-primary" id="gate-open">Подписаться</button>
+          <button class="btn btn-glass" id="gate-check">Я подписался</button>
+        </div>
+      </div>
+
+      <div id="ob-blocked" class="hidden center">
+        <div class="mark" style="margin:0 auto">🌱</div>
+        <h1 style="margin-top:24px">Пока рано</h1>
+        <p class="muted" style="margin-top:12px;font-size:15px;line-height:1.55">
+          Приложение открыто с <b id="min-age-txt">16</b> лет.
+        </p>
+        <div class="glass pad" style="margin-top:20px;text-align:left">
+          <p class="tiny">
+            Дело не в вредности. Черты лица меняются примерно до двадцати с
+            небольшим, и любая оценка сейчас говорит о будущей внешности
+            примерно ничего. А ещё привычка сверяться с цифрой каждый день
+            портит настроение куда надёжнее, чем улучшает внешность.
+          </p>
+          <p class="tiny" style="margin-top:12px">
+            Если хочется что-то делать уже сейчас — работает ровно то же, что и
+            у всех: сон, спорт, базовый уход и SPF. Никаких приложений для
+            этого не нужно.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══════════════ СЕГОДНЯ ══════════════ -->
+  <section class="screen" id="s-today">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Ежедневный режим</p>
+      <h1 style="margin-top:6px">Сегодня</h1>
+    </header>
+
+    <div class="glass streak-card">
+      <div class="streak-flame" id="td-flame">🔥</div>
+      <div>
+        <div class="numeral streak-num" id="td-streak">0</div>
+        <div class="streak-label" id="td-streak-label">дней подряд</div>
+      </div>
+      <div class="streak-side">
+        <div class="tiny">Лучшая серия</div>
+        <div class="numeral" id="td-best" style="font-size:19px">0</div>
+      </div>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px">
+      <div class="rank-row">
+        <span class="rank-emoji" id="td-rank-emoji">🌱</span>
+        <div style="flex:1;min-width:0">
+          <h2 id="td-rank-title">Старт</h2>
+          <p class="tiny" id="td-rank-caption">—</p>
+        </div>
+      </div>
+      <div class="rank-bar"><i id="td-rank-fill"></i></div>
+      <p class="tiny" id="td-rank-next" style="margin-top:7px"></p>
+    </div>
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:8px;display:flex;justify-content:space-between;align-items:baseline">
+        <p class="eyebrow">Привычки дня</p>
+        <span class="tiny" id="td-progress">0 / 5</span>
+      </div>
+      <div id="td-habits"></div>
+      <p class="tiny" id="td-need" style="padding:0 16px 15px"></p>
+    </div>
+
+    <div class="glass pad scan-quota" id="td-quota"></div>
+
+    <div class="glass pad xp-card" id="td-xp"></div>
+
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:10px">
+        <p class="eyebrow">Достижения</p>
+      </div>
+      <div class="ach-strip" id="td-achievements"></div>
+    </div>
+
+    <p class="disclaimer">
+      Серия не рвётся, если пропустил один день. Два подряд — начинаем заново.
+    </p>
+  </section>
+
+  <!-- ══════════════ СКАН ══════════════ -->
+  <section class="screen" id="s-scan">
+    <header style="margin-bottom:18px">
+      <p class="eyebrow">Новый отчёт</p>
+      <h1 style="margin-top:6px">Скан</h1>
+    </header>
+
+    <!-- состояние: загрузка фото -->
+    <div id="scan-idle">
+      <div class="drop" id="drop" tabindex="0" role="button">
+        <div class="drop-icon">📸</div>
+        <div>
+          <h2>Загрузить фото</h2>
+          <p class="tiny" style="margin-top:5px">
+            Анфас · ровный свет · без фильтров
+          </p>
+        </div>
+      </div>
+      <input type="file" id="file" accept="image/*" class="hidden">
+
+      <div class="glass pad" style="margin-top:12px">
+        <h3>Как получить точный отчёт</h3>
+        <ul class="guide-block" style="margin-top:10px;list-style:none;display:flex;flex-direction:column;gap:8px">
+          <li style="position:relative;padding-left:17px;font-size:13.5px;color:var(--ink-2)">Камера на уровне глаз, с расстояния вытянутой руки</li>
+          <li style="position:relative;padding-left:17px;font-size:13.5px;color:var(--ink-2)">Дневной или мягкий боковой свет</li>
+          <li style="position:relative;padding-left:17px;font-size:13.5px;color:var(--ink-2)">Нейтральное выражение, лицо целиком в кадре</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- состояние: анализ -->
+    <div id="scan-run" class="hidden">
+      <div class="preview">
+        <img id="preview-img" alt="">
+        <div class="scanline"></div>
+        <canvas class="mesh" id="mesh"></canvas>
+        <div class="scan-status">
+          <span id="scan-label">Инициализация</span>
+          <span class="scan-pct" id="scan-pct">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- состояние: результат -->
+    <div id="scan-result" class="hidden">
+      <div class="glass" style="padding:22px 16px 20px">
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 216 216">
+            <circle class="track" cx="108" cy="108" r="94"/>
+            <circle class="value" id="ring-value" cx="108" cy="108" r="94"/>
+          </svg>
+          <div class="ring-core">
+            <div class="numeral ring-score" id="res-score">0.0</div>
+            <div class="ring-max">из 10</div>
+          </div>
+        </div>
+        <div class="center">
+          <div class="tier-chip" id="res-tier"></div>
+          <p class="tiny" style="margin-top:12px" id="res-percentile"></p>
+          <button class="share-btn" id="share-open">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v13M12 3l-4 4M12 3l4 4"/>
+              <path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14"/>
+            </svg>
+            Поделиться
+          </button>
+        </div>
+      </div>
+
+      <div class="glass" style="margin-top:12px">
+        <div class="pad" style="padding-bottom:6px">
+          <p class="eyebrow">Детализация</p>
+        </div>
+        <div id="res-params"></div>
+      </div>
+
+      <div class="glass" style="margin-top:12px" id="res-measure-card">
+        <div class="pad" style="padding-bottom:8px">
+          <p class="eyebrow">Замеры</p>
+        </div>
+        <div id="res-measurements"></div>
+        <p class="tiny" style="padding:2px 16px 15px;color:var(--ink-3)">
+          Вычислено по 478 точкам лица на твоём устройстве. Снимок никуда не отправлялся.
+        </p>
+      </div>
+
+      <div class="glass pad" style="margin-top:12px">
+        <p class="eyebrow">Зоны роста</p>
+        <div id="res-tips" style="margin-top:12px;display:flex;flex-direction:column;gap:14px"></div>
+      </div>
+
+      <div class="stack" style="margin-top:14px">
+        <button class="btn btn-glass" id="scan-again">Новый отчёт</button>
+      </div>
+
+      <p class="disclaimer">
+        Развлекательный формат. Оценки генерируются алгоритмом и не являются
+        медицинским или экспертным заключением.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════ ПРОФИЛЬ ══════════════ -->
+  <section class="screen" id="s-profile">
+    <header style="margin-bottom:18px">
+      <p class="eyebrow">Твои показатели</p>
+      <h1 style="margin-top:6px">Профиль</h1>
+    </header>
+
+    <div class="glass">
+      <div class="profile-head">
+        <div class="avatar" id="pf-avatar">?</div>
+        <div style="min-width:0">
+          <h2 id="pf-name">—</h2>
+          <p class="tiny" id="pf-tier">Отчётов пока нет</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="glass stat">
+        <div class="numeral stat-value" id="pf-best">—</div>
+        <div class="stat-label">Лучший</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="pf-avg">—</div>
+        <div class="stat-label">Средний</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="pf-count">0</div>
+        <div class="stat-label">Отчётов</div>
+      </div>
+    </div>
+
+    <div class="glass" style="margin-top:12px">
+      <div class="pad" style="padding-bottom:12px">
+        <p class="eyebrow">Динамика</p>
+      </div>
+      <div style="padding:0 14px">
+        <div class="segments" id="segments">
+          <div class="segment-pill" id="seg-pill"></div>
+          <button class="segment active" data-period="day">Дни</button>
+          <button class="segment" data-period="week">Недели</button>
+          <button class="segment" data-period="month">Месяцы</button>
+        </div>
+      </div>
+      <div class="chart-box" id="chart-box"></div>
+    </div>
+
+    <p class="disclaimer">
+      График строится по твоим отчётам. Разброс между съёмками — это чаще всего
+      свет, ракурс и время суток, а не изменения внешности.
+    </p>
+  </section>
+
+  <!-- ══════════════ ДРУЗЬЯ ══════════════ -->
+  <section class="screen" id="s-friends">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Реферальная программа</p>
+      <h1 style="margin-top:6px">Друзья</h1>
+    </header>
+
+    <div class="glass pad">
+      <p class="eyebrow">Твой код</p>
+      <div class="ref-code" id="ref-code">—</div>
+      <button class="btn btn-primary" id="ref-copy" style="margin-top:12px">
+        Скопировать код
+      </button>
+      <button class="btn btn-glass" id="ref-share" style="margin-top:8px">
+        Отправить другу
+      </button>
+      <p class="tiny" style="margin-top:12px" id="ref-note"></p>
+    </div>
+
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-invited">0</div>
+        <div class="stat-label">Пригласил</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-earned">0</div>
+        <div class="stat-label">XP получено</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-reward">0</div>
+        <div class="stat-label">За друга</div>
+      </div>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px" id="ref-enter-card">
+      <p class="eyebrow">Тебя пригласили?</p>
+      <p class="tiny" style="margin-top:6px" id="ref-enter-note"></p>
+      <input class="ref-input" id="ref-input" placeholder="КОД ДРУГА"
+             autocomplete="off" autocapitalize="characters" maxlength="12">
+      <button class="btn btn-glass" id="ref-apply" style="margin-top:9px">
+        Применить код
+      </button>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px">
+      <h3>Как это работает</h3>
+      <ul class="guide-block" style="margin-top:10px;list-style:none;display:flex;flex-direction:column;gap:8px">
+        <li>Отправь свой код другу любым способом</li>
+        <li>Он вводит его здесь или командой /ref в боте</li>
+        <li>XP приходят вам обоим сразу</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ══════════════ ГАЙДЫ ══════════════ -->
+  <section class="screen" id="s-guides">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Что реально работает</p>
+      <h1 style="margin-top:6px">Гайды</h1>
+    </header>
+
+    <div class="glass pad shop-balance" id="shop-balance"></div>
+
+    <p class="eyebrow" style="margin:20px 0 10px">Открываются за XP</p>
+    <div id="shop-list"></div>
+
+    <p class="eyebrow" style="margin:24px 0 10px">Бесплатные</p>
+    <div id="guides-list"></div>
+  </section>
+
+  <!-- ══════════════ ТАБ-БАР ══════════════ -->
+  <nav class="tabs" id="tabs">
+    <div class="tab-pill" id="tab-pill"></div>
+    <button class="tab active" data-screen="s-today">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3c.6 3 2.2 4.2 3.6 5.6A7.5 7.5 0 0 1 18 14a6 6 0 0 1-12 0c0-1.8.8-3.4 2-4.6 0 1.2.8 2.1 1.8 2.1 1.4 0 2.2-1.4 1.6-3.3-.5-1.7-.2-3.6.6-5.2z"/>
+      </svg>
+      Сегодня
+    </button>
+    <button class="tab" data-screen="s-scan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>
+        <circle cx="12" cy="12" r="3.2"/>
+      </svg>
+      Скан
+    </button>
+    <button class="tab" data-screen="s-profile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 17l5-5 4 3 5-6 4 4"/>
+        <path d="M3 21h18"/>
+      </svg>
+      Профиль
+    </button>
+    <button class="tab" data-screen="s-friends">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="8" r="3.2"/>
+        <path d="M3 20a6 6 0 0 1 12 0"/>
+        <path d="M16.5 5.5a3 3 0 0 1 0 5.6M18 20a6 6 0 0 0-2.2-4.6"/>
+      </svg>
+      Друзья
+    </button>
+    <button class="tab" data-screen="s-guides">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/>
+        <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>
+      </svg>
+      Гайды
+    </button>
+  </nav>
+
+</div>
+
+<!-- Шторка «поделиться» -->
+<div class="sheet-veil" id="sheet-veil"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-grip"></div>
+  <div class="sheet-head">
+    <h2>Карточка результата</h2>
+    <p class="tiny">Пролистай — выбери оформление</p>
+  </div>
+  <div class="card-rail" id="card-rail"></div>
+  <div class="card-dots" id="card-dots"></div>
+  <div class="sheet-actions">
+    <button class="btn btn-primary" id="share-send">Отправить</button>
+    <button class="btn btn-glass" id="share-save">Сохранить в галерею</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
