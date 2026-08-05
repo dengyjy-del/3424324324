@@ -133,6 +133,64 @@ async def cmd_audience(message: Message, db: Database, config: Config) -> None:
     await message.answer(texts.audience(await db.audience(since), days))
 
 
+@router.message(Command("checkgate"))
+async def cmd_checkgate(message: Message, config: Config) -> None:
+    """
+    Проверка гейта по шагам. Только для ID из ADMIN_IDS.
+
+    Нужна, потому что при ошибке проверки источник пропускается молча —
+    иначе кривой конфиг заблокировал бы всех пользователей разом. Побочный
+    эффект: снаружи неработающая проверка выглядит как выключенная.
+    """
+    user = message.from_user
+    if user is None:
+        return
+
+    if not config.admin_ids or not config.is_admin(user.id):
+        await message.answer("🚫 Команда только для владельца.")
+        return
+
+    sources = [("Канал", config.channel_id), ("Чат", config.chat_id)]
+    lines = ["🔎 <b>ПРОВЕРКА ДОСТУПА</b>", texts.LINE]
+
+    for label, chat_id in sources:
+        if not chat_id:
+            lines.append(f"{label}: <i>переменная не задана</i>")
+            continue
+
+        lines.append(f"<b>{label}</b> — <code>{texts.safe(chat_id)}</code>")
+        try:
+            chat = await message.bot.get_chat(chat_id)
+            lines.append(f"  ✅ найден: {texts.safe(chat.title or '—')}")
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ не найден: {texts.safe(str(error)[:90])}")
+            continue
+
+        try:
+            me = await message.bot.get_chat_member(chat_id, message.bot.id)
+            ok = me.status in ("administrator", "creator")
+            lines.append(
+                "  ✅ бот администратор" if ok
+                else f"  ❌ бот не админ (статус: {me.status})"
+            )
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ статус бота неизвестен: {texts.safe(str(error)[:70])}")
+            continue
+
+        try:
+            member = await message.bot.get_chat_member(chat_id, user.id)
+            lines.append(f"  ✅ проверка участника работает (твой статус: {member.status})")
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ участника не проверить: {texts.safe(str(error)[:70])}")
+
+    lines += [
+        texts.LINE,
+        "<i>Проверка требует, чтобы бот был администратором. Для приватного "
+        "чата в CHAT_ID нужен числовой ID вида -100…, а не ссылка.</i>",
+    ]
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("referrals"))
 async def cmd_referrals(message: Message, db: Database, config: Config) -> None:
     """Сводка по приглашениям. Только для ID из ADMIN_IDS."""
@@ -170,21 +228,26 @@ async def handle_photo(
     message: Message, db: Database, config: Config, demo: DemoState
 ) -> None:
     """
-    Бот больше не считает оценку сам.
+    Обычным пользователям бот оценку не считает.
 
-    Замеры лица вычисляются по 478 точкам прямо в браузере мини-аппа, и
-    воспроизвести их на стороне бота невозможно: библиотека распознавания
-    весит больше, чем помещается в serverless-функцию. Пока бот считал по
-    своей формуле, одно и то же фото давало в боте и в приложении разные
-    баллы — а это ровно то, из-за чего к оценкам теряют доверие.
+    Замеры лица снимаются по 478 точкам в браузере мини-аппа, и повторить
+    их на стороне бота нельзя: библиотека распознавания не помещается в
+    serverless-функцию. Пока бот считал по своей формуле, одно фото давало
+    в боте и в приложении разные баллы — из-за этого к оценкам и теряли
+    доверие. Поэтому источник оценки один.
 
-    Поэтому источник оценки теперь один — приложение.
+    Исключение — режим съёмки: там баллы заранее известны и от замеров не
+    зависят, так что для роликов бот отвечает прямо в чате.
     """
     user = message.from_user
     if user is None:
         return
 
     if message.media_group_id and not await db.claim_album(message.media_group_id):
+        return
+
+    if await demo.is_active(user.id):
+        await _demo_report(message, user, config)
         return
 
     if config.webapp_url:
@@ -194,6 +257,32 @@ async def handle_photo(
         )
     else:
         await message.answer(texts.PHOTO_NO_APP)
+
+
+async def _demo_report(message: Message, user: User, config: Config) -> None:
+    """Отчёт в чате для записи роликов: анимация, затем карточка."""
+    photo_id = message.photo[-1].file_unique_id
+    report = generate_report(user.id, photo_id, config.score_salt, rating.DEMO)
+
+    with contextlib.suppress(TelegramAPIError):
+        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+
+    label, percent = texts.SCAN_STAGES[0]
+    status = await message.answer(texts.scan_frame(label, percent))
+
+    for label, percent in texts.SCAN_STAGES[1:]:
+        await asyncio.sleep(config.scan_delay)
+        with contextlib.suppress(TelegramBadRequest):
+            await status.edit_text(texts.scan_frame(label, percent))
+
+    await asyncio.sleep(config.scan_delay)
+
+    card = texts.report_card(report, display_name(user), show_header=False)
+    markup = keyboards.report_menu(photo_id, demo=True)
+    try:
+        await status.edit_text(card, reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer(card, reply_markup=markup)
 
 
 @router.message(F.document)

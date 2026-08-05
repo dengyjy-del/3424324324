@@ -133,6 +133,81 @@ async def cmd_audience(message: Message, db: Database, config: Config) -> None:
     await message.answer(texts.audience(await db.audience(since), days))
 
 
+@router.message(Command("checkgate"))
+async def cmd_checkgate(message: Message, config: Config) -> None:
+    """
+    Проверка гейта по шагам. Только для ID из ADMIN_IDS.
+
+    Нужна, потому что при ошибке проверки источник пропускается молча —
+    иначе кривой конфиг заблокировал бы всех пользователей разом. Побочный
+    эффект: снаружи неработающая проверка выглядит как выключенная.
+    """
+    user = message.from_user
+    if user is None:
+        return
+
+    if not config.admin_ids or not config.is_admin(user.id):
+        await message.answer("🚫 Команда только для владельца.")
+        return
+
+    sources = [("Канал", config.channel_id), ("Чат", config.chat_id)]
+    lines = ["🔎 <b>ПРОВЕРКА ДОСТУПА</b>", texts.LINE]
+
+    for label, chat_id in sources:
+        if not chat_id:
+            lines.append(f"{label}: <i>переменная не задана</i>")
+            continue
+
+        lines.append(f"<b>{label}</b> — <code>{texts.safe(chat_id)}</code>")
+        try:
+            chat = await message.bot.get_chat(chat_id)
+            lines.append(f"  ✅ найден: {texts.safe(chat.title or '—')}")
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ не найден: {texts.safe(str(error)[:90])}")
+            continue
+
+        try:
+            me = await message.bot.get_chat_member(chat_id, message.bot.id)
+            ok = me.status in ("administrator", "creator")
+            lines.append(
+                "  ✅ бот администратор" if ok
+                else f"  ❌ бот не админ (статус: {me.status})"
+            )
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ статус бота неизвестен: {texts.safe(str(error)[:70])}")
+            continue
+
+        try:
+            member = await message.bot.get_chat_member(chat_id, user.id)
+            lines.append(f"  ✅ проверка участника работает (твой статус: {member.status})")
+        except TelegramAPIError as error:
+            lines.append(f"  ❌ участника не проверить: {texts.safe(str(error)[:70])}")
+
+    lines += [
+        texts.LINE,
+        "<i>Проверка требует, чтобы бот был администратором. Для приватного "
+        "чата в CHAT_ID нужен числовой ID вида -100…, а не ссылка.</i>",
+    ]
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("referrals"))
+async def cmd_referrals(message: Message, db: Database, config: Config) -> None:
+    """Сводка по приглашениям. Только для ID из ADMIN_IDS."""
+    user = message.from_user
+    if user is None:
+        return
+
+    if not config.admin_ids or not config.is_admin(user.id):
+        await message.answer(
+            "🚫 Команда только для владельца.\n"
+            "Впиши свой ID (его покажет /myid) в переменную ADMIN_IDS."
+        )
+        return
+
+    await message.answer(texts.referral_stats(await db.referral_stats(10)))
+
+
 @router.message(Command("demo_off"))
 async def cmd_demo_off(message: Message, demo: DemoState) -> None:
     user = message.from_user
@@ -152,22 +227,42 @@ async def cmd_demo_off(message: Message, demo: DemoState) -> None:
 async def handle_photo(
     message: Message, db: Database, config: Config, demo: DemoState
 ) -> None:
-    # Дедуп альбомов через базу: на serverless память между вызовами
-    # функции не сохраняется, а пачка фото приходит разными апдейтами.
-    if message.media_group_id and not await db.claim_album(message.media_group_id):
-        return
+    """
+    Обычным пользователям бот оценку не считает.
 
+    Замеры лица снимаются по 478 точкам в браузере мини-аппа, и повторить
+    их на стороне бота нельзя: библиотека распознавания не помещается в
+    serverless-функцию. Пока бот считал по своей формуле, одно фото давало
+    в боте и в приложении разные баллы — из-за этого к оценкам и теряли
+    доверие. Поэтому источник оценки один.
+
+    Исключение — режим съёмки: там баллы заранее известны и от замеров не
+    зависят, так что для роликов бот отвечает прямо в чате.
+    """
     user = message.from_user
     if user is None:
         return
 
-    photo_id = message.photo[-1].file_unique_id
-    in_demo = await demo.is_active(user.id)
-    profile = rating.DEMO if in_demo else rating.NORMAL
+    if message.media_group_id and not await db.claim_album(message.media_group_id):
+        return
 
-    # Фото сознательно НЕ скачивается: отчёт строится детерминированно
-    # по идентификатору файла, само изображение боту не нужно.
-    report = generate_report(user.id, photo_id, config.score_salt, profile)
+    if await demo.is_active(user.id):
+        await _demo_report(message, user, config)
+        return
+
+    if config.webapp_url:
+        await message.answer(
+            texts.PHOTO_TO_APP,
+            reply_markup=keyboards.open_app(config.webapp_url),
+        )
+    else:
+        await message.answer(texts.PHOTO_NO_APP)
+
+
+async def _demo_report(message: Message, user: User, config: Config) -> None:
+    """Отчёт в чате для записи роликов: анимация, затем карточка."""
+    photo_id = message.photo[-1].file_unique_id
+    report = generate_report(user.id, photo_id, config.score_salt, rating.DEMO)
 
     with contextlib.suppress(TelegramAPIError):
         await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
@@ -182,16 +277,12 @@ async def handle_photo(
 
     await asyncio.sleep(config.scan_delay)
 
-    card = texts.report_card(report, display_name(user), show_header=not in_demo)
-    markup = keyboards.report_menu(photo_id, in_demo, config.webapp_url)
+    card = texts.report_card(report, display_name(user), show_header=False)
+    markup = keyboards.report_menu(photo_id, demo=True)
     try:
         await status.edit_text(card, reply_markup=markup)
     except TelegramBadRequest:
         await message.answer(card, reply_markup=markup)
-
-    # Демо-оценки не попадают ни в статистику, ни в топ.
-    if not in_demo:
-        await db.save_rating(user.id, report.report_id, report.overall)
 
 
 @router.message(F.document)

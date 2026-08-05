@@ -153,6 +153,10 @@ class BaseDatabase(ABC):
     async def referral_count(self, user_id: int) -> int: ...
 
     @abstractmethod
+    async def referral_stats(self, limit: int = 10) -> dict:
+        """Сводка по приглашениям: всего, топ пригласивших, выдано XP."""
+
+    @abstractmethod
     async def audience(self, active_since: datetime) -> dict:
         """Сводка по аудитории: всего, с возрастом, активные, гистограмма лет."""
 
@@ -536,6 +540,37 @@ class SQLiteDatabase(BaseDatabase):
             "SELECT COUNT(*) AS n FROM users WHERE referred_by = ?", (user_id,)
         ) as cursor:
             return int((await cursor.fetchone())["n"])
+
+    async def referral_stats(self, limit: int = 10) -> dict:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE referred_by IS NOT NULL"
+        ) as cursor:
+            total = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute(
+            """
+              SELECT referred_by AS inviter, COUNT(*) AS n
+                FROM users WHERE referred_by IS NOT NULL
+            GROUP BY referred_by ORDER BY n DESC, inviter LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            top = [(int(r["inviter"]), int(r["n"])) for r in await cursor.fetchall()]
+
+        async with self.conn.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0) AS n FROM xp_events
+             WHERE key LIKE 'referral:%' OR key LIKE 'refbonus:%'
+            """
+        ) as cursor:
+            xp = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute(
+            "SELECT COUNT(DISTINCT referred_by) AS n FROM users WHERE referred_by IS NOT NULL"
+        ) as cursor:
+            inviters = int((await cursor.fetchone())["n"])
+
+        return {"total": total, "inviters": inviters, "xp": xp, "top": top}
 
     async def audience(self, active_since: datetime) -> dict:
         moment = active_since.isoformat(timespec="seconds")
@@ -990,6 +1025,36 @@ class PostgresDatabase(BaseDatabase):
                 "SELECT COUNT(*) FROM users WHERE referred_by = $1", user_id
             )
         return int(value or 0)
+
+    async def referral_stats(self, limit: int = 10) -> dict:
+        async with self.pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL"
+            )
+            inviters = await conn.fetchval(
+                "SELECT COUNT(DISTINCT referred_by) FROM users WHERE referred_by IS NOT NULL"
+            )
+            rows = await conn.fetch(
+                """
+                  SELECT referred_by AS inviter, COUNT(*) AS n
+                    FROM users WHERE referred_by IS NOT NULL
+                GROUP BY referred_by ORDER BY n DESC, inviter LIMIT $1
+                """,
+                limit,
+            )
+            xp = await conn.fetchval(
+                """
+                SELECT COALESCE(SUM(amount), 0) FROM xp_events
+                 WHERE key LIKE 'referral:%' OR key LIKE 'refbonus:%'
+                """
+            )
+
+        return {
+            "total": int(total or 0),
+            "inviters": int(inviters or 0),
+            "xp": int(xp or 0),
+            "top": [(int(r["inviter"]), int(r["n"])) for r in rows],
+        }
 
     async def audience(self, active_since: datetime) -> dict:
         async with self.pool.acquire() as conn:

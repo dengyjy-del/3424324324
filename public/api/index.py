@@ -94,7 +94,7 @@ try:
 
     db = create_database(config.database_url)
     demo = DemoState(db, config.demo_ttl_minutes)
-    gate = SubscriptionGate(config.channel_id)
+    gate = SubscriptionGate(*config.gate_sources)
 
     bot = Bot(
         token=config.bot_token,

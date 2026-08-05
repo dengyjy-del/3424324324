@@ -71,7 +71,7 @@ async def run(config: Config) -> None:
     dispatcher = Dispatcher()
     dispatcher["db"] = db
     dispatcher["config"] = config
-    gate = SubscriptionGate(config.channel_id)
+    gate = SubscriptionGate(*config.gate_sources)
     dispatcher["gate"] = gate
     demo_state = DemoState(db, config.demo_ttl_minutes)
     dispatcher["demo"] = demo_state

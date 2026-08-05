@@ -21,16 +21,21 @@ POSITIVE_CACHE_TTL = 600.0
 
 
 class SubscriptionGate:
-    """Проверяет членство в канале. Пустой channel_id = гейт выключен."""
+    """
+    Проверяет членство сразу в нескольких местах: канал, чат и т. д.
 
-    def __init__(self, channel_id: str) -> None:
-        self._channel_id = channel_id
+    Пустой список источников = гейт выключен. Пропускаем только тех, кто
+    состоит во всех указанных: иначе смысл требования теряется.
+    """
+
+    def __init__(self, *chat_ids: str) -> None:
+        self._chats = [c.strip() for c in chat_ids if c and c.strip()]
         self._cache: dict[int, float] = {}
         self._misconfigured = False
 
     @property
     def enabled(self) -> bool:
-        return bool(self._channel_id)
+        return bool(self._chats)
 
     def forget(self, user_id: int) -> None:
         self._cache.pop(user_id, None)
@@ -43,24 +48,28 @@ class SubscriptionGate:
         if self._cache.get(user_id, 0.0) > now:
             return True
 
-        try:
-            member = await bot.get_chat_member(self._channel_id, user_id)
-        except TelegramAPIError as error:
-            # Чаще всего: бот не админ в канале или неверный CHANNEL_ID.
-            # Пропускаем людей дальше, чтобы бот не выглядел сломанным,
-            # но пишем в лог один раз — чтобы владелец это увидел.
-            if not self._misconfigured:
-                self._misconfigured = True
-                logger.error(
-                    "Не удалось проверить подписку на %s (%s). "
-                    "Добавь бота администратором в канал, иначе гейт не работает.",
-                    self._channel_id,
-                    error,
-                )
-            return True
+        is_member = True
+        for chat_id in self._chats:
+            try:
+                member = await bot.get_chat_member(chat_id, user_id)
+            except TelegramAPIError as error:
+                # Чаще всего: бот не администратор или неверный ID.
+                # Пропускаем людей дальше, чтобы бот не выглядел сломанным,
+                # но пишем в лог — чтобы владелец увидел причину.
+                if not self._misconfigured:
+                    self._misconfigured = True
+                    logger.error(
+                        "Не удалось проверить подписку на %s (%s). Добавь бота "
+                        "администратором туда, иначе проверка не работает.",
+                        chat_id,
+                        error,
+                    )
+                continue
 
-        self._misconfigured = False
-        is_member = member.status in MEMBER_STATUSES
+            self._misconfigured = False
+            if member.status not in MEMBER_STATUSES:
+                is_member = False
+                break
 
         if is_member:
             self._cache[user_id] = now + POSITIVE_CACHE_TTL

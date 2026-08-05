@@ -158,7 +158,20 @@ export function computeMetrics(landmarks, width, height) {
     pt(P.lipTop)
   ) || 1;
 
+  // Форма лица: округлость и то, как оно сужается книзу. Эти признаки
+  // помогают отличать узкое лицо от широкого и полного.
+  const midJaw = dist(pt(58), pt(288));
+  const lowJaw = dist(pt(P.jawL), pt(P.jawR));
+
   return {
+    face_aspect: faceWidth / faceHeight,
+    mid_jaw: midJaw / (faceWidth || 1),
+    low_jaw: lowJaw / (faceWidth || 1),
+    chin_taper: dist(pt(148), pt(377)) / (faceWidth || 1),
+    jaw_drop: dist(chin, pt(P.lipTop)) / (faceWidth || 1),
+    cheek_to_jaw: dist(cheekL, pt(P.jawL)) / (faceWidth || 1),
+    lower_third: dist(subnasale, chin) / faceHeight,
+
     canthal_tilt: canthalTilt,
     eye_aspect: eyeAspect,
     symmetry,
