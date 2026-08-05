@@ -26,6 +26,10 @@ def main_menu(webapp_url: str = "") -> InlineKeyboardMarkup:
         )
     builder.row(InlineKeyboardButton(text="📸 Как получить отчёт", callback_data="howto"))
     builder.row(
+        InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="ref"),
+        InlineKeyboardButton(text="🔑 Ввести код", callback_data="refenter"),
+    )
+    builder.row(
         InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
         InlineKeyboardButton(text="ℹ️ О боте", callback_data="about"),
     )

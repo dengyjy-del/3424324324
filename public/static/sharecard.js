@@ -136,11 +136,22 @@ function header(ctx, brand) {
   });
 }
 
-function footer(ctx, username) {
-  divider(ctx, H - 132);
-  text(ctx, username || "", 70, H - 78, { size: 33, weight: 700 });
-  text(ctx, "проверь себя", W - 70, H - 78, {
+function footer(ctx, username, refCode) {
+  divider(ctx, H - 152);
+  text(ctx, username || "", 70, H - 98, { size: 33, weight: 700 });
+  text(ctx, "проверь себя", W - 70, H - 98, {
     size: 25, weight: 500, color: "rgba(255,255,255,0.45)", align: "right",
+  });
+
+  if (!refCode) return;
+
+  // Код приглашения: тот, кто увидит карточку, сможет ввести его и
+  // получить стартовые XP — а автор карточки получит награду.
+  text(ctx, "код приглашения", 70, H - 52, {
+    size: 19, weight: 600, spacing: 2.4, color: "rgba(255,255,255,0.4)",
+  });
+  text(ctx, refCode, W - 70, H - 48, {
+    size: 30, weight: 700, spacing: 3, align: "right", color: "rgba(255,255,255,0.92)",
   });
 }
 
@@ -201,9 +212,9 @@ function drawScores(ctx, data) {
   });
 
   divider(ctx, 700);
-  rows(ctx, data.topScores.map((s) => ({ title: `${s.emoji}  ${s.title}`, value: s.value.toFixed(1) })), 762, 88);
+  rows(ctx, data.topScores.map((s) => ({ title: `${s.emoji}  ${s.title}`, value: s.value.toFixed(1) })), 754, 82);
 
-  footer(ctx, data.username);
+  footer(ctx, data.username, data.refCode);
 }
 
 function drawMetrics(ctx, data) {
@@ -221,7 +232,7 @@ function drawMetrics(ctx, data) {
     valueColor: "#00e0c6",
   });
 
-  const boxY = H - 340;
+  const boxY = H - 356;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   roundRect(ctx, 70, boxY, W - 140, 132, 28);
   ctx.fill();
@@ -235,7 +246,7 @@ function drawMetrics(ctx, data) {
     size: 72, weight: 700, align: "right",
   });
 
-  footer(ctx, data.username);
+  footer(ctx, data.username, data.refCode);
 }
 
 function drawFull(ctx, data) {
@@ -261,11 +272,11 @@ function drawFull(ctx, data) {
   text(ctx, "ЗАМЕРЫ", 70, 918, {
     size: 19, weight: 600, spacing: 3, color: "rgba(0,224,198,0.6)",
   });
-  rows(ctx, data.metrics.slice(0, 2).map((m) => ({ title: `${m.emoji}  ${m.title}`, value: m.value })), 976, 78, {
+  rows(ctx, data.metrics.slice(0, 2).map((m) => ({ title: `${m.emoji}  ${m.title}`, value: m.value })), 966, 74, {
     valueColor: "#00e0c6",
   });
 
-  footer(ctx, data.username);
+  footer(ctx, data.username, data.refCode);
 }
 
 const PAINTERS = { scores: drawScores, metrics: drawMetrics, full: drawFull };
@@ -285,11 +296,12 @@ export function renderCard(canvas, themeId, data) {
 }
 
 /** Готовит данные отчёта к отрисовке. */
-export function cardData(report, brand, username) {
+export function cardData(report, brand, username, refCode) {
   const sorted = [...report.scores].sort((a, b) => b.value - a.value);
   return {
     brand: brand || "LOOKSCORE",
     username: username || "",
+    refCode: refCode || "",
     overall: report.overall,
     percentile: report.percentile,
     tier: report.tier,

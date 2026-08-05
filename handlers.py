@@ -266,6 +266,39 @@ async def cb_details(
     )
 
 
+@router.callback_query(F.data == "ref")
+async def cb_ref(callback: CallbackQuery, db: Database, config: Config) -> None:
+    from webapp.server import make_ref_code
+
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or user is None:
+        return
+
+    code = await db.get_ref_code(user.id)
+    if not code:
+        await db.set_ref_code(user.id, make_ref_code(user.id, config.score_salt))
+        code = await db.get_ref_code(user.id)
+
+    await callback.message.answer(
+        texts.referral(code or "—", await db.referral_count(user.id)),
+        reply_markup=keyboards.back_menu(),
+    )
+
+
+@router.callback_query(F.data == "refenter")
+async def cb_ref_enter(callback: CallbackQuery, db: Database) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+
+    if await db.referrer_of(callback.from_user.id) is not None:
+        await callback.message.answer(texts.REF_ALREADY, reply_markup=keyboards.back_menu())
+        return
+
+    await callback.message.answer(texts.REF_HOWTO, reply_markup=keyboards.back_menu())
+
+
 @router.callback_query(F.data == "stats")
 async def cb_stats(callback: CallbackQuery, db: Database) -> None:
     await callback.answer()

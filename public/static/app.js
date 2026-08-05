@@ -111,6 +111,7 @@ function initTabs() {
       movePill(pill, button, tabs);
       showScreen(button.dataset.screen);
       if (button.dataset.screen === "s-today") loadToday();
+      if (button.dataset.screen === "s-friends") loadFriends();
       if (button.dataset.screen === "s-profile") {
         loadProfile();
         // Размеры считаются только на видимом экране, иначе подложка
@@ -205,7 +206,7 @@ function renderToday(data) {
     `<div style="min-width:0"><h3>Твои XP</h3>` +
     `<p class="tiny" style="margin-top:3px">Копятся за привычки и отчёты, ` +
     `тратятся на гайды</p></div>` +
-    `<span class="xp-amount">${xp.balance}</span>`;
+    `<span class="xp-amount">${xp.unlimited ? "∞" : xp.balance}</span>`;
 
   $("td-achievements").innerHTML = data.achievements
     .map(
@@ -221,34 +222,124 @@ function renderToday(data) {
 async function loadToday() {
   try {
     renderToday(await api("/api/today"));
-    loadReferral();
   } catch (error) {
     toast(error.message);
   }
 }
 
-async function loadReferral() {
+
+/**
+ * Копирование с проверкой результата.
+ *
+ * navigator.clipboard в Telegram WebView часто резолвится успешно, но в
+ * буфер ничего не кладёт. Поэтому пробуем оба способа и проверяем, что
+ * текст действительно попал в буфер, а не полагаемся на отсутствие ошибки.
+ */
+async function copyText(text) {
   try {
-    const data = await api("/api/referral");
-    state.refCode = data.code;
-    $("ref-code").textContent = data.code;
-    $("ref-note").textContent =
-      `За каждого друга, который введёт твой код — +${data.reward} XP. Ему самому +${data.bonus} XP.`;
-    $("ref-count").textContent = data.invited
-      ? `Уже пригласил: ${data.invited}`
-      : "Отправь код другу — он вводит его командой /ref в боте";
+    await navigator.clipboard.writeText(text);
+    const written = await navigator.clipboard.readText().catch(() => null);
+    if (written === null || written === text) return true;
   } catch (_) {}
+
+  // Запасной путь: скрытое поле и старая команда копирования
+  try {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+    document.body.appendChild(field);
+    field.select();
+    field.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(field);
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+function renderFriends(data) {
+  state.refCode = data.code || "";
+  $("ref-code").textContent = state.refCode || "—";
+  $("ref-invited").textContent = data.invited;
+  $("ref-earned").textContent = data.invited * data.reward;
+  $("ref-reward").textContent = `+${data.reward}`;
+  $("ref-note").textContent =
+    `За каждого друга по твоему коду — +${data.reward} XP тебе и +${data.bonus} XP ему.`;
+
+  // Код можно применить только один раз, дальше карточка ввода не нужна
+  $("ref-enter-card").classList.toggle("hidden", data.used);
+  $("ref-enter-note").textContent =
+    `Введи код того, кто тебя позвал — получишь +${data.bonus} XP.`;
+}
+
+async function loadFriends() {
+  try {
+    renderFriends(await api("/api/referral"));
+  } catch (error) {
+    $("ref-code").textContent = "—";
+    toast(error.message);
+  }
 }
 
 function initReferral() {
   $("ref-copy").addEventListener("click", async () => {
     haptic("medium");
-    const text = state.refCode || "";
+    const code = state.refCode;
+    if (!code) return;
+    toast(
+      (await copyText(code))
+        ? "Код скопирован"
+        : `Скопируй вручную: ${code}`
+    );
+  });
+
+  $("ref-share").addEventListener("click", () => {
+    haptic("medium");
+    const code = state.refCode;
+    if (!code) return;
+    const message =
+      `Мой код в ${state.brand}: ${code}\n` +
+      `Введи его в ${state.botUsername} и получишь стартовые XP.`;
+
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(
+        `https://t.me/share/url?url=${encodeURIComponent(
+          "https://t.me/" + (state.botUsername || "").replace("@", "")
+        )}&text=${encodeURIComponent(message)}`
+      );
+    } else if (navigator.share) {
+      navigator.share({ text: message });
+    } else {
+      copyText(message).then(() => toast("Приглашение скопировано"));
+    }
+  });
+
+  $("ref-apply").addEventListener("click", async () => {
+    haptic("medium");
+    const value = ($("ref-input").value || "").trim().toUpperCase();
+    if (!value) return toast("Введи код друга");
+
+    const button = $("ref-apply");
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner"></span>';
+
+    const body = new FormData();
+    body.append("code", value);
+
     try {
-      await navigator.clipboard.writeText(text);
-      toast("Код скопирован");
-    } catch (_) {
-      toast(`Твой код: ${text}`);
+      const result = await api("/api/referral", { method: "POST", body });
+      notifySuccess();
+      toast(`Код принят, +${result.bonus} XP`);
+      $("ref-input").value = "";
+      loadFriends();
+      loadToday();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Применить код";
     }
   });
 }
@@ -659,8 +750,9 @@ function openSheet() {
   if (!report) return;
 
   haptic("medium");
+  if (!state.refCode) loadFriends();
   const themes = availableThemes(report);
-  const data = cardData(report, state.brand, state.botUsername);
+  const data = cardData(report, state.brand, state.botUsername, state.refCode);
 
   const rail = $("card-rail");
   rail.innerHTML = "";
@@ -961,16 +1053,16 @@ async function buyGuide(id, price) {
   }
 }
 
-function renderShop(shop, balance) {
+function renderShop(shop, balance, unlimited) {
   $("shop-balance").innerHTML =
     `<div style="min-width:0"><h3>Баланс</h3>` +
     `<p class="tiny" style="margin-top:3px">Отмечай привычки каждый день — ` +
     `гайд копится примерно за неделю</p></div>` +
-    `<span class="xp-amount">${balance}</span>`;
+    `<span class="xp-amount">${unlimited ? "∞" : balance}</span>`;
 
   $("shop-list").innerHTML = shop
     .map((guide) => {
-      const affordable = balance >= guide.price;
+      const affordable = unlimited || balance >= guide.price;
       const button = guide.owned
         ? '<span class="shop-price owned">Открыт</span>'
         : `<button class="shop-price${affordable ? "" : " locked"}" ` +
@@ -1015,7 +1107,7 @@ async function loadGuides() {
   try {
     data = await api("/api/guides");
     state.guides = data.guides;
-    renderShop(data.shop || [], data.balance || 0);
+    renderShop(data.shop || [], data.balance || 0, data.unlimited);
   } catch (error) {
     return;
   }

@@ -151,13 +151,6 @@
 
     <div class="glass pad xp-card" id="td-xp"></div>
 
-    <div class="glass pad" style="margin-top:10px">
-      <p class="eyebrow">Приглашай друзей</p>
-      <p class="tiny" style="margin-top:6px" id="ref-note"></p>
-      <div class="ref-code" id="ref-code">······</div>
-      <button class="btn btn-glass" id="ref-copy" style="margin-top:10px">Скопировать код</button>
-      <p class="tiny" style="margin-top:10px" id="ref-count"></p>
-    </div>
 
     <div class="glass" style="margin-top:10px">
       <div class="pad" style="padding-bottom:10px">
@@ -327,6 +320,60 @@
     </p>
   </section>
 
+  <!-- ══════════════ ДРУЗЬЯ ══════════════ -->
+  <section class="screen" id="s-friends">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Реферальная программа</p>
+      <h1 style="margin-top:6px">Друзья</h1>
+    </header>
+
+    <div class="glass pad">
+      <p class="eyebrow">Твой код</p>
+      <div class="ref-code" id="ref-code">—</div>
+      <button class="btn btn-primary" id="ref-copy" style="margin-top:12px">
+        Скопировать код
+      </button>
+      <button class="btn btn-glass" id="ref-share" style="margin-top:8px">
+        Отправить другу
+      </button>
+      <p class="tiny" style="margin-top:12px" id="ref-note"></p>
+    </div>
+
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-invited">0</div>
+        <div class="stat-label">Пригласил</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-earned">0</div>
+        <div class="stat-label">XP получено</div>
+      </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="ref-reward">0</div>
+        <div class="stat-label">За друга</div>
+      </div>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px" id="ref-enter-card">
+      <p class="eyebrow">Тебя пригласили?</p>
+      <p class="tiny" style="margin-top:6px" id="ref-enter-note"></p>
+      <input class="ref-input" id="ref-input" placeholder="КОД ДРУГА"
+             autocomplete="off" autocapitalize="characters" maxlength="12">
+      <button class="btn btn-glass" id="ref-apply" style="margin-top:9px">
+        Применить код
+      </button>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px">
+      <h3>Как это работает</h3>
+      <ul class="guide-block" style="margin-top:10px;list-style:none;display:flex;flex-direction:column;gap:8px">
+        <li>Отправь свой код другу любым способом</li>
+        <li>Он вводит его здесь или командой /ref в боте</li>
+        <li>XP приходят вам обоим сразу</li>
+      </ul>
+    </div>
+  </section>
+
   <!-- ══════════════ ГАЙДЫ ══════════════ -->
   <section class="screen" id="s-guides">
     <header style="margin-bottom:16px">
@@ -365,6 +412,14 @@
         <path d="M3 21h18"/>
       </svg>
       Профиль
+    </button>
+    <button class="tab" data-screen="s-friends">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="8" r="3.2"/>
+        <path d="M3 20a6 6 0 0 1 12 0"/>
+        <path d="M16.5 5.5a3 3 0 0 1 0 5.6M18 20a6 6 0 0 0-2.2-4.6"/>
+      </svg>
+      Друзья
     </button>
     <button class="tab" data-screen="s-guides">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">

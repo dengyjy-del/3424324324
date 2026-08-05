@@ -1313,6 +1313,34 @@ h3 {
   color: transparent;
 }
 
+.ref-input {
+  width: 100%;
+  margin-top: 11px;
+  padding: 15px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--stroke);
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.ref-input::placeholder {
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.ref-input:focus {
+  outline: none;
+  border-color: rgba(91, 75, 255, 0.6);
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .ref-code {
   margin-top: 10px;
   padding: 14px;
@@ -1320,10 +1348,13 @@ h3 {
   background: rgba(255, 255, 255, 0.05);
   border: 1px dashed var(--stroke-bright);
   text-align: center;
-  font-size: 25px;
+  font-size: 29px;
   font-weight: 700;
-  letter-spacing: 0.22em;
-  text-indent: 0.22em;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+  /* Код должен легко выделяться пальцем, если копирование не сработало */
+  user-select: all;
+  -webkit-user-select: all;
 }
 
 .shop-balance { display: flex; align-items: center; gap: 12px; }

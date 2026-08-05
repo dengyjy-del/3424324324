@@ -317,10 +317,12 @@ def create_app(
     async def guides(user: TelegramUser = Depends(current_user)) -> dict:
         owned = await db.purchased(user.id)
         earned, spent = await db.xp_balance(user.id)
+        unlimited = config.is_admin(user.id)
 
         return {
             "guides": GUIDES,
             "balance": earned - spent,
+            "unlimited": unlimited,
             "shop": [
                 {
                     "id": guide.id,
@@ -351,16 +353,19 @@ def create_app(
             return {"ok": True, "already": True}
 
         earned, spent = await db.xp_balance(user.id)
-        if earned - spent < guide.price:
+        free = config.is_admin(user.id)
+
+        if not free and earned - spent < guide.price:
             raise HTTPException(
                 status_code=402,
                 detail=f"Не хватает {guide.price - (earned - spent)} XP",
             )
 
-        if not await db.purchase(user.id, guide_id, guide.price):
+        # У владельца покупка ничего не списывает
+        if not await db.purchase(user.id, guide_id, 0 if free else guide.price):
             return {"ok": True, "already": True}
 
-        return {"ok": True, "balance": earned - spent - guide.price}
+        return {"ok": True, "balance": earned - spent - (0 if free else guide.price)}
 
     @app.get("/api/referral")
     async def referral(user: TelegramUser = Depends(current_user)) -> dict:
@@ -449,7 +454,13 @@ def create_app(
                 "left": max(0, config.daily_scan_limit - used_today),
                 "unlimited": unlimited,
             },
-            "xp": {"balance": earned - spent, "earned": earned, "spent": spent},
+            "xp": {
+                "balance": earned - spent,
+                "earned": earned,
+                "spent": spent,
+                # Владельцу лимит мешал бы проверять магазин и снимать контент
+                "unlimited": unlimited,
+            },
             "achievements": [
                 {
                     "code": item.code,
