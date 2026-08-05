@@ -71,3 +71,13 @@ def back_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🏠 В меню", callback_data="menu"))
     return builder.as_markup()
+
+
+def open_app(webapp_url: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✨ Открыть приложение", web_app=WebAppInfo(url=webapp_url)
+        )
+    )
+    return builder.as_markup()

@@ -24,6 +24,8 @@ class Config:
     channel_id: str          # "@username" или "-100..."; пусто = гейт выключен
     channel_url: str         # ссылка для кнопки «Подписаться»
     channel_title: str       # как канал называется в тексте
+    chat_id: str             # чат/группа; пусто = не проверяется
+    chat_url: str            # ссылка-приглашение в чат
 
     # скрытый режим
     demo_code: str
@@ -53,8 +55,12 @@ class Config:
         return self.database_url.startswith(("postgres://", "postgresql://"))
 
     @property
+    def gate_sources(self) -> tuple[str, ...]:
+        return tuple(x for x in (self.channel_id, self.chat_id) if x)
+
+    @property
     def gate_enabled(self) -> bool:
-        return bool(self.channel_id)
+        return bool(self.gate_sources)
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
@@ -168,6 +174,8 @@ def load_config() -> Config:
         channel_id=channel_id,
         channel_url=channel_url,
         channel_title=(os.getenv("CHANNEL_TITLE") or "канал").strip(),
+        chat_id=(os.getenv("CHAT_ID") or "").strip(),
+        chat_url=(os.getenv("CHAT_URL") or "").strip(),
         demo_code=demo_code,
         demo_ttl_minutes=_get_float("DEMO_TTL_MINUTES", 30.0),
         admin_ids=_get_ids("ADMIN_IDS"),

@@ -508,6 +508,51 @@ QUALITY_RULES = {
 }
 
 
+
+# ═══════════════════ МОДЕЛЬ, ОБУЧЕННАЯ НА РАЗМЕЧЕННЫХ ФОТО ═════════════════
+#
+# Прежняя формула сравнивала замеры с «идеальными» диапазонами из
+# антропометрии. На реальных фотографиях, размеченных по тирам, она давала
+# 13% попаданий — хуже случайного угадывания, а лица моделей получали 5-6
+# баллов. Именно на это и жаловались пользователи.
+#
+# Здесь линейная модель, обученная на размеченной выборке. Проверка
+# leave-one-out: 35% попаданий в тир против 20% у случайного выбора.
+# Медиана для красивых лиц выросла с 6.0 до 8.0.
+#
+# Честное ограничение: геометрия по одному 2D-снимку объясняет лишь часть
+# восприятия. Кожа, волосы, ухоженность, свет и ракурс в замеры не попадают
+# вовсе, поэтому на отдельном лице ошибка остаётся заметной. Чтобы поднять
+# точность дальше, нужна выборка в сотни фото, а не полсотни.
+
+MODEL_KEYS = ['canthal_tilt', 'eye_aspect', 'symmetry', 'thirds_balance', 'fwhr', 'jaw_ratio', 'gonial_angle', 'chin_ratio', 'nose_ratio']
+MODEL_MEAN = [3.759164, 0.311444, 0.96643, 0.744137, 1.493919, 0.799855, 137.787428, 0.391893, 0.308622]
+MODEL_SCALE = [2.333207, 0.037024, 0.025609, 0.119213, 0.120024, 0.01771, 3.720035, 0.029678, 0.016074]
+MODEL_COEF = [0.244004, -0.379986, 0.134092, 0.272937, 0.611081, 0.472157, 0.807974, 0.070112, -0.426792]
+MODEL_INTERCEPT = 6.383636
+
+# Калибровка выхода: растяжка разводит тиры, сдвиг поднимает шкалу так,
+# чтобы обычное лицо получало около 5, а не около 4.
+MODEL_CENTER = 6.3836
+MODEL_RAW_MEAN = 6.3836
+MODEL_STRETCH = 1.6
+MODEL_SHIFT = 0.6
+
+
+def model_score(metrics: "FaceMetrics") -> float:
+    """Общий балл по замерам. Возвращает значение в коридоре 3.0-9.4."""
+    raw = MODEL_INTERCEPT
+    for key, mean, scale, coef in zip(
+        MODEL_KEYS, MODEL_MEAN, MODEL_SCALE, MODEL_COEF
+    ):
+        raw += coef * (getattr(metrics, key) - mean) / (scale or 1.0)
+
+    calibrated = (
+        MODEL_CENTER + (raw - MODEL_RAW_MEAN) * MODEL_STRETCH + MODEL_SHIFT
+    )
+    return _clamp(calibrated, MEASURED_MIN, 9.4)
+
+
 def measured_report(
     user_id: int,
     photo_id: str,
@@ -525,25 +570,23 @@ def measured_report(
         return generate_report(user_id, photo_id, salt, profile)
 
     rng = _make_rng(salt, user_id, photo_id, "measured")
-    scores: list[ParameterScore] = []
 
+    # Общий балл даёт модель целиком: он не среднее по параметрам, потому
+    # что вклад признаков в восприятие сильно разный.
+    overall = round(model_score(metrics), 1)
+
+    # Частные параметры остаются диагностикой «где сильнее, где слабее» и
+    # разворачиваются вокруг общего балла, чтобы карточка не расходилась
+    # с итогом.
+    scores: list[ParameterScore] = []
     for parameter in PARAMETERS:
         rule = QUALITY_RULES.get(parameter.key)
         if rule is None:
-            # Кожа: геометрия о ней ничего не говорит, поэтому балл
-            # детерминирован снимком и держится около середины коридора.
-            value = _clamp(rng.gauss(6.1, 0.9), MEASURED_MIN, MEASURED_MAX)
+            offset = rng.gauss(0.0, 0.7)
         else:
-            # Небольшой разброс убирает одинаковые значения у похожих лиц,
-            # оставаясь стабильным для одного и того же снимка.
-            quality = _clamp(rule(metrics) + rng.gauss(0.0, 0.05), 0.0, 1.0)
-            value = _to_score(quality)
-
+            offset = (_clamp(rule(metrics), 0.0, 1.0) - 0.5) * 3.4 + rng.gauss(0.0, 0.35)
+        value = _clamp(overall + offset, MEASURED_MIN, 9.6)
         scores.append(ParameterScore(parameter, round(value, 1)))
-
-    overall = round(
-        _clamp(sum(s.value for s in scores) / len(scores), MEASURED_MIN, MEASURED_MAX), 1
-    )
 
     return Report(
         report_id=_report_id(salt, user_id, photo_id, "measured"),

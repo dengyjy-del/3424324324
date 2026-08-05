@@ -133,6 +133,23 @@ async def cmd_audience(message: Message, db: Database, config: Config) -> None:
     await message.answer(texts.audience(await db.audience(since), days))
 
 
+@router.message(Command("referrals"))
+async def cmd_referrals(message: Message, db: Database, config: Config) -> None:
+    """Сводка по приглашениям. Только для ID из ADMIN_IDS."""
+    user = message.from_user
+    if user is None:
+        return
+
+    if not config.admin_ids or not config.is_admin(user.id):
+        await message.answer(
+            "🚫 Команда только для владельца.\n"
+            "Впиши свой ID (его покажет /myid) в переменную ADMIN_IDS."
+        )
+        return
+
+    await message.answer(texts.referral_stats(await db.referral_stats(10)))
+
+
 @router.message(Command("demo_off"))
 async def cmd_demo_off(message: Message, demo: DemoState) -> None:
     user = message.from_user
@@ -152,46 +169,31 @@ async def cmd_demo_off(message: Message, demo: DemoState) -> None:
 async def handle_photo(
     message: Message, db: Database, config: Config, demo: DemoState
 ) -> None:
-    # Дедуп альбомов через базу: на serverless память между вызовами
-    # функции не сохраняется, а пачка фото приходит разными апдейтами.
-    if message.media_group_id and not await db.claim_album(message.media_group_id):
-        return
+    """
+    Бот больше не считает оценку сам.
 
+    Замеры лица вычисляются по 478 точкам прямо в браузере мини-аппа, и
+    воспроизвести их на стороне бота невозможно: библиотека распознавания
+    весит больше, чем помещается в serverless-функцию. Пока бот считал по
+    своей формуле, одно и то же фото давало в боте и в приложении разные
+    баллы — а это ровно то, из-за чего к оценкам теряют доверие.
+
+    Поэтому источник оценки теперь один — приложение.
+    """
     user = message.from_user
     if user is None:
         return
 
-    photo_id = message.photo[-1].file_unique_id
-    in_demo = await demo.is_active(user.id)
-    profile = rating.DEMO if in_demo else rating.NORMAL
+    if message.media_group_id and not await db.claim_album(message.media_group_id):
+        return
 
-    # Фото сознательно НЕ скачивается: отчёт строится детерминированно
-    # по идентификатору файла, само изображение боту не нужно.
-    report = generate_report(user.id, photo_id, config.score_salt, profile)
-
-    with contextlib.suppress(TelegramAPIError):
-        await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-
-    label, percent = texts.SCAN_STAGES[0]
-    status = await message.answer(texts.scan_frame(label, percent))
-
-    for label, percent in texts.SCAN_STAGES[1:]:
-        await asyncio.sleep(config.scan_delay)
-        with contextlib.suppress(TelegramBadRequest):
-            await status.edit_text(texts.scan_frame(label, percent))
-
-    await asyncio.sleep(config.scan_delay)
-
-    card = texts.report_card(report, display_name(user), show_header=not in_demo)
-    markup = keyboards.report_menu(photo_id, in_demo, config.webapp_url)
-    try:
-        await status.edit_text(card, reply_markup=markup)
-    except TelegramBadRequest:
-        await message.answer(card, reply_markup=markup)
-
-    # Демо-оценки не попадают ни в статистику, ни в топ.
-    if not in_demo:
-        await db.save_rating(user.id, report.report_id, report.overall)
+    if config.webapp_url:
+        await message.answer(
+            texts.PHOTO_TO_APP,
+            reply_markup=keyboards.open_app(config.webapp_url),
+        )
+    else:
+        await message.answer(texts.PHOTO_NO_APP)
 
 
 @router.message(F.document)
