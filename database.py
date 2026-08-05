@@ -643,6 +643,20 @@ CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ratings_unique ON ratings(user_id, report_id);
 """
 
+# CREATE TABLE IF NOT EXISTS не добавляет колонки к таблице, которая уже
+# существует. Поэтому каждое новое поле нужно отдельно дописывать сюда —
+# иначе на боевой базе оно просто не появится, а код упадёт на первом же
+# обращении к нему. Все команды идемпотентны, повторный запуск безопасен.
+PG_MIGRATIONS = """
+ALTER TABLE users ADD COLUMN IF NOT EXISTS declared_age INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by  BIGINT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
+CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by);
+"""
+
 PG_BUCKETS = {"day": "YYYY-MM-DD", "week": 'IYYY-"W"IW', "month": "YYYY-MM"}
 
 
@@ -691,6 +705,7 @@ class PostgresDatabase(BaseDatabase):
         )
         async with self._pool.acquire() as conn:
             await conn.execute(PG_SCHEMA)
+            await conn.execute(PG_MIGRATIONS)
 
     async def close(self) -> None:
         if self._pool is not None:

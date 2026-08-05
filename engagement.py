@@ -244,7 +244,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="🗿",
         title="Челюсть и нижняя треть",
         tagline="Что правда работает, а что миф",
-        price=140,
+        price=240,
         blocks=(
             {
                 "heading": "С чего начинается чёткая челюсть",
@@ -301,7 +301,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="📏",
         title="Рост и осанка",
         tagline="Честно о том, на что можно повлиять",
-        price=140,
+        price=360,
         blocks=(
             {
                 "heading": "Сначала правда",
@@ -347,7 +347,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="✨",
         title="Кожа: протокол на 90 дней",
         tagline="Пошагово, без двенадцати шагов",
-        price=170,
+        price=270,
         blocks=(
             {
                 "heading": "Недели 1–2: только база",
@@ -400,7 +400,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="👁",
         title="Взгляд и зона глаз",
         tagline="Самая заметная зона лица",
-        price=160,
+        price=260,
         blocks=(
             {
                 "heading": "Почему смотрят именно сюда",
@@ -444,7 +444,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="🧥",
         title="Стиль и подача",
         tagline="Быстрее любых изменений лица",
-        price=120,
+        price=220,
         blocks=(
             {
                 "heading": "Порядок действий",
@@ -489,7 +489,7 @@ SHOP: tuple[ShopGuide, ...] = (
         emoji="👑",
         title="Полный протокол",
         tagline="Всё вместе: план на три месяца",
-        price=300,
+        price=800,
         blocks=(
             {
                 "heading": "Месяц 1: фундамент",
