@@ -58,6 +58,38 @@ async def cmd_stats(message: Message, db: Database) -> None:
     await _send_stats(message, db, message.from_user)
 
 
+@router.message(Command("ref"))
+async def cmd_ref(message: Message, db: Database, config: Config) -> None:
+    """
+    /ref — свой код, /ref КОД — ввести чужой.
+
+    Логика начисления живёт в webapp.server, чтобы правила в боте и в
+    приложении не разъехались.
+    """
+    from webapp.server import apply_ref_code, make_ref_code
+
+    user = message.from_user
+    if user is None:
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+
+    if len(parts) == 1:
+        code = await db.get_ref_code(user.id)
+        if not code:
+            await db.set_ref_code(user.id, make_ref_code(user.id, config.score_salt))
+            code = await db.get_ref_code(user.id)
+        invited = await db.referral_count(user.id)
+        await message.answer(texts.referral(code or "—", invited))
+        return
+
+    result = await apply_ref_code(db, user.id, parts[1])
+    if result["ok"]:
+        await message.answer(texts.ref_applied(result["bonus"]))
+    else:
+        await message.answer(f"❌ {result['error']}")
+
+
 @router.message(Command("myid"))
 async def cmd_myid(message: Message) -> None:
     if message.from_user is not None:

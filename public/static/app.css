@@ -1290,3 +1290,72 @@ h3 {
 }
 
 .sheet-actions { display: flex; flex-direction: column; gap: 9px; }
+
+
+/* ── XP и магазин ────────────────────────────────────────── */
+
+.xp-card {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.xp-amount {
+  margin-left: auto;
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, var(--aura-mint), var(--aura-indigo));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ref-code {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed var(--stroke-bright);
+  text-align: center;
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
+}
+
+.shop-balance { display: flex; align-items: center; gap: 12px; }
+
+.shop-item { margin-bottom: 10px; }
+
+.shop-head {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px;
+}
+
+.shop-price {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-rose));
+  color: #fff;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.24s var(--spring), filter 0.2s;
+}
+
+.shop-price:active { transform: scale(0.93); }
+.shop-price.locked { background: rgba(255, 255, 255, 0.09); color: var(--ink-3); }
+.shop-price.owned {
+  background: rgba(0, 224, 198, 0.16);
+  color: var(--aura-mint);
+  cursor: default;
+}

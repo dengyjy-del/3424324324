@@ -18,6 +18,7 @@ const state = {
   botUsername: "",
   report: null,
   cardTheme: 0,
+  refCode: "",
   guides: [],
 };
 
@@ -199,6 +200,13 @@ function renderToday(data) {
     `<div style="min-width:0"><h3>Отчёты сегодня</h3>` +
     `<p class="tiny" style="margin-top:3px">${quotaText}</p></div>${quotaDots}`;
 
+  const xp = data.xp || { balance: 0 };
+  $("td-xp").innerHTML =
+    `<div style="min-width:0"><h3>Твои XP</h3>` +
+    `<p class="tiny" style="margin-top:3px">Копятся за привычки и отчёты, ` +
+    `тратятся на гайды</p></div>` +
+    `<span class="xp-amount">${xp.balance}</span>`;
+
   $("td-achievements").innerHTML = data.achievements
     .map(
       (item) => `
@@ -213,9 +221,36 @@ function renderToday(data) {
 async function loadToday() {
   try {
     renderToday(await api("/api/today"));
+    loadReferral();
   } catch (error) {
     toast(error.message);
   }
+}
+
+async function loadReferral() {
+  try {
+    const data = await api("/api/referral");
+    state.refCode = data.code;
+    $("ref-code").textContent = data.code;
+    $("ref-note").textContent =
+      `За каждого друга, который введёт твой код — +${data.reward} XP. Ему самому +${data.bonus} XP.`;
+    $("ref-count").textContent = data.invited
+      ? `Уже пригласил: ${data.invited}`
+      : "Отправь код другу — он вводит его командой /ref в боте";
+  } catch (_) {}
+}
+
+function initReferral() {
+  $("ref-copy").addEventListener("click", async () => {
+    haptic("medium");
+    const text = state.refCode || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Код скопирован");
+    } catch (_) {
+      toast(`Твой код: ${text}`);
+    }
+  });
 }
 
 async function markHabit(key) {
@@ -910,10 +945,77 @@ function renderBlock(block) {
   return `<div class="guide-block">${heading}<p>${block.text}</p></div>`;
 }
 
-async function loadGuides() {
+async function buyGuide(id, price) {
+  haptic("medium");
+  const body = new FormData();
+  body.append("guide_id", id);
+
   try {
-    const data = await api("/api/guides");
+    await api("/api/buy", { method: "POST", body });
+    notifySuccess();
+    toast("Гайд открыт");
+    await loadGuides();
+    loadToday();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderShop(shop, balance) {
+  $("shop-balance").innerHTML =
+    `<div style="min-width:0"><h3>Баланс</h3>` +
+    `<p class="tiny" style="margin-top:3px">Отмечай привычки каждый день — ` +
+    `гайд копится примерно за неделю</p></div>` +
+    `<span class="xp-amount">${balance}</span>`;
+
+  $("shop-list").innerHTML = shop
+    .map((guide) => {
+      const affordable = balance >= guide.price;
+      const button = guide.owned
+        ? '<span class="shop-price owned">Открыт</span>'
+        : `<button class="shop-price${affordable ? "" : " locked"}" ` +
+          `data-buy="${guide.id}" data-price="${guide.price}">${guide.price} XP</button>`;
+
+      const body = guide.owned
+        ? `<div class="guide-body"><div class="guide-inner"><div class="guide-content">` +
+          `${guide.blocks.map(renderBlock).join("")}</div></div></div>`
+        : "";
+
+      return `<article class="glass guide shop-item" data-id="${guide.id}">
+          <div class="shop-head">
+            <div class="guide-emoji">${guide.emoji}</div>
+            <div class="guide-meta">
+              <h2>${guide.title}</h2>
+              <p class="tiny">${guide.tagline}</p>
+            </div>
+            ${button}
+          </div>${body}
+        </article>`;
+    })
+    .join("");
+
+  document.querySelectorAll("[data-buy]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      buyGuide(button.dataset.buy, Number(button.dataset.price));
+    });
+  });
+
+  // Купленный гайд раскрывается по нажатию, как и бесплатный
+  document.querySelectorAll(".shop-item").forEach((item) => {
+    if (!item.querySelector(".guide-body")) return;
+    item.querySelector(".shop-head").addEventListener("click", () =>
+      item.classList.toggle("open")
+    );
+  });
+}
+
+async function loadGuides() {
+  let data;
+  try {
+    data = await api("/api/guides");
     state.guides = data.guides;
+    renderShop(data.shop || [], data.balance || 0);
   } catch (error) {
     return;
   }
@@ -971,6 +1073,7 @@ async function boot() {
   buildAgeGrid();
   initGate();
   initShare();
+  initReferral();
   initScan();
   initSegments();
 

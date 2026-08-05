@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
+import hmac
 import re
 from pathlib import Path
 
@@ -243,6 +244,11 @@ def create_app(
         if not in_demo:
             await db.save_rating(user.id, report.report_id, report.overall)
 
+        if not in_demo:
+            await db.award_xp(
+                user.id, f"scan:{date.today().isoformat()}", engagement.XP_PER_SCAN
+            )
+
         payload = _report_payload(report, hide_id=in_demo)
         payload["measurements"] = (
             rating.metrics_readout(face) if face is not None and not in_demo else []
@@ -271,6 +277,17 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
         await db.set_habit_mask(user.id, today_key, updated)
+
+        # Ключ события содержит дату и привычку, поэтому снять и поставить
+        # галочку заново второй раз XP уже не принесёт.
+        for habit in engagement.HABITS:
+            if updated & (1 << habit.bit):
+                await db.award_xp(
+                    user.id, f"habit:{today_key}:{habit.key}", engagement.XP_PER_HABIT
+                )
+        if engagement.is_day_counted(updated):
+            await db.award_xp(user.id, f"day:{today_key}", engagement.XP_DAY_BONUS)
+
         return await _today_payload(user.id)
 
     @app.get("/api/profile")
@@ -297,8 +314,73 @@ def create_app(
         }
 
     @app.get("/api/guides")
-    async def guides() -> dict:
-        return {"guides": GUIDES}
+    async def guides(user: TelegramUser = Depends(current_user)) -> dict:
+        owned = await db.purchased(user.id)
+        earned, spent = await db.xp_balance(user.id)
+
+        return {
+            "guides": GUIDES,
+            "balance": earned - spent,
+            "shop": [
+                {
+                    "id": guide.id,
+                    "emoji": guide.emoji,
+                    "title": guide.title,
+                    "tagline": guide.tagline,
+                    "price": guide.price,
+                    "owned": guide.id in owned,
+                    # Содержимое отдаём только купившему, иначе платный
+                    # раздел можно было бы прочитать прямо из ответа API.
+                    "blocks": list(guide.blocks) if guide.id in owned else [],
+                }
+                for guide in engagement.SHOP
+            ],
+        }
+
+    @app.post("/api/buy")
+    async def buy(
+        guide_id: str = Form(...), user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        await _require_subscription(user.id)
+
+        guide = engagement.SHOP_BY_ID.get(guide_id)
+        if guide is None:
+            raise HTTPException(status_code=404, detail="Гайд не найден")
+
+        if guide_id in await db.purchased(user.id):
+            return {"ok": True, "already": True}
+
+        earned, spent = await db.xp_balance(user.id)
+        if earned - spent < guide.price:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Не хватает {guide.price - (earned - spent)} XP",
+            )
+
+        if not await db.purchase(user.id, guide_id, guide.price):
+            return {"ok": True, "already": True}
+
+        return {"ok": True, "balance": earned - spent - guide.price}
+
+    @app.get("/api/referral")
+    async def referral(user: TelegramUser = Depends(current_user)) -> dict:
+        code = await _ensure_ref_code(user.id)
+        return {
+            "code": code,
+            "invited": await db.referral_count(user.id),
+            "reward": engagement.XP_REFERRAL,
+            "bonus": engagement.XP_REFERRAL_BONUS,
+            "used": await db.referrer_of(user.id) is not None,
+        }
+
+    @app.post("/api/referral")
+    async def use_referral(
+        code: str = Form(...), user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        result = await apply_ref_code(db, user.id, code)
+        if not result["ok"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
 
     # ─────────────────────────── хелперы ───────────────────────────────
 
@@ -322,6 +404,13 @@ def create_app(
         upcoming, days_left = engagement.next_rank(streak.total_days)
         opened = engagement.unlocked(streak, scans_total)
 
+        # Награда за каждые семь дней серии
+        if streak.current and streak.current % 7 == 0:
+            await db.award_xp(
+                user_id, f"streak:{streak.current}", engagement.XP_STREAK_WEEK
+            )
+
+        earned, spent = await db.xp_balance(user_id)
         used_today = await db.count_ratings_since(user_id, _day_start())
         unlimited = config.is_admin(user_id)
 
@@ -360,6 +449,7 @@ def create_app(
                 "left": max(0, config.daily_scan_limit - used_today),
                 "unlimited": unlimited,
             },
+            "xp": {"balance": earned - spent, "earned": earned, "spent": spent},
             "achievements": [
                 {
                     "code": item.code,
@@ -371,6 +461,14 @@ def create_app(
                 for item in engagement.ACHIEVEMENTS
             ],
         }
+
+    async def _ensure_ref_code(user_id: int) -> str:
+        code = await db.get_ref_code(user_id)
+        if code:
+            return code
+        code = make_ref_code(user_id, config.score_salt)
+        await db.set_ref_code(user_id, code)
+        return await db.get_ref_code(user_id) or code
 
     async def _is_subscribed(user_id: int) -> bool:
         """Гейт выключен, бот не передан или это админ — считаем подписанным."""
@@ -460,4 +558,48 @@ def _report_payload(report: rating.Report, hide_id: bool = False) -> dict:
             }
             for s in report.weakest(3)
         ],
+    }
+
+
+# ───────────────────────── реферальные коды ────────────────────────────────
+
+# Без похожих символов: 0/O и 1/I/L путают при переписывании с экрана.
+CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def make_ref_code(user_id: int, salt: str, length: int = 6) -> str:
+    digest = hashlib.sha256(f"{salt}|ref|{user_id}".encode()).digest()
+    return "".join(CODE_ALPHABET[b % len(CODE_ALPHABET)] for b in digest[:length])
+
+
+async def apply_ref_code(db, user_id: int, raw_code: str) -> dict:
+    """
+    Привязывает пользователя к пригласившему и начисляет обоим XP.
+
+    Единая точка для бота и приложения, чтобы правила не разъезжались.
+    """
+    code = (raw_code or "").strip().upper()
+    if not re.fullmatch(rf"[{CODE_ALPHABET}]{{4,12}}", code):
+        return {"ok": False, "error": "Код состоит из букв и цифр без пробелов"}
+
+    if await db.referrer_of(user_id) is not None:
+        return {"ok": False, "error": "Ты уже вводил код приглашения"}
+
+    owner = await db.user_by_ref_code(code)
+    if owner is None:
+        return {"ok": False, "error": "Такого кода не существует"}
+    if owner == user_id:
+        return {"ok": False, "error": "Свой собственный код ввести нельзя"}
+
+    if not await db.bind_referrer(user_id, owner):
+        return {"ok": False, "error": "Код уже применён"}
+
+    await db.award_xp(user_id, f"refbonus:{owner}", engagement.XP_REFERRAL_BONUS)
+    await db.award_xp(owner, f"referral:{user_id}", engagement.XP_REFERRAL)
+
+    return {
+        "ok": True,
+        "bonus": engagement.XP_REFERRAL_BONUS,
+        "owner_id": owner,
+        "reward": engagement.XP_REFERRAL,
     }

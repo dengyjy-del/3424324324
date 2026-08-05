@@ -121,6 +121,38 @@ class BaseDatabase(ABC):
     async def set_habit_mask(self, user_id: int, day: str, mask: int) -> None: ...
 
     @abstractmethod
+    async def award_xp(self, user_id: int, key: str, amount: int) -> bool:
+        """Начисляет XP. False, если событие с таким ключом уже было."""
+
+    @abstractmethod
+    async def xp_balance(self, user_id: int) -> tuple[int, int]:
+        """(заработано всего, потрачено)."""
+
+    @abstractmethod
+    async def purchase(self, user_id: int, guide_id: str, price: int) -> bool: ...
+
+    @abstractmethod
+    async def purchased(self, user_id: int) -> set[str]: ...
+
+    @abstractmethod
+    async def set_ref_code(self, user_id: int, code: str) -> None: ...
+
+    @abstractmethod
+    async def get_ref_code(self, user_id: int) -> str | None: ...
+
+    @abstractmethod
+    async def user_by_ref_code(self, code: str) -> int | None: ...
+
+    @abstractmethod
+    async def referrer_of(self, user_id: int) -> int | None: ...
+
+    @abstractmethod
+    async def bind_referrer(self, user_id: int, referrer_id: int) -> bool: ...
+
+    @abstractmethod
+    async def referral_count(self, user_id: int) -> int: ...
+
+    @abstractmethod
     async def audience(self, active_since: datetime) -> dict:
         """Сводка по аудитории: всего, с возрастом, активные, гистограмма лет."""
 
@@ -145,7 +177,9 @@ CREATE TABLE IF NOT EXISTS users (
     last_overall  REAL    NOT NULL DEFAULT 0,
     sum_overall   REAL    NOT NULL DEFAULT 0,
     declared_age  INTEGER,
-    onboarded_at  TEXT
+    onboarded_at  TEXT,
+    ref_code      TEXT UNIQUE,
+    referred_by   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -171,6 +205,24 @@ CREATE TABLE IF NOT EXISTS habits (
     day     TEXT    NOT NULL,
     mask    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
+);
+
+-- Ключ события уникален, поэтому повторное начисление за то же действие
+-- в тот же день просто не проходит. Идемпотентность без блокировок.
+CREATE TABLE IF NOT EXISTS xp_events (
+    user_id    INTEGER NOT NULL,
+    key        TEXT    NOT NULL,
+    amount     INTEGER NOT NULL,
+    created_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS purchases (
+    user_id    INTEGER NOT NULL,
+    guide_id   TEXT    NOT NULL,
+    price      INTEGER NOT NULL,
+    created_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, guide_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
@@ -208,6 +260,8 @@ class SQLiteDatabase(BaseDatabase):
         for column, ddl in (
             ("declared_age", "ALTER TABLE users ADD COLUMN declared_age INTEGER"),
             ("onboarded_at", "ALTER TABLE users ADD COLUMN onboarded_at TEXT"),
+            ("ref_code", "ALTER TABLE users ADD COLUMN ref_code TEXT"),
+            ("referred_by", "ALTER TABLE users ADD COLUMN referred_by INTEGER"),
         ):
             if column not in columns:
                 await self.conn.execute(ddl)
@@ -397,6 +451,92 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
 
+    async def award_xp(self, user_id: int, key: str, amount: int) -> bool:
+        await self.ensure_user(user_id)
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO xp_events (user_id, key, amount, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (user_id, key, amount, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def xp_balance(self, user_id: int) -> tuple[int, int]:
+        async with self.conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS n FROM xp_events WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            earned = int((await cursor.fetchone())["n"])
+        async with self.conn.execute(
+            "SELECT COALESCE(SUM(price), 0) AS n FROM purchases WHERE user_id = ?",
+            (user_id,),
+        ) as cursor:
+            spent = int((await cursor.fetchone())["n"])
+        return earned, spent
+
+    async def purchase(self, user_id: int, guide_id: str, price: int) -> bool:
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO purchases (user_id, guide_id, price, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (user_id, guide_id, price, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def purchased(self, user_id: int) -> set[str]:
+        async with self.conn.execute(
+            "SELECT guide_id FROM purchases WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            return {row["guide_id"] for row in await cursor.fetchall()}
+
+    async def set_ref_code(self, user_id: int, code: str) -> None:
+        await self.ensure_user(user_id)
+        await self.conn.execute(
+            "UPDATE users SET ref_code = ? WHERE user_id = ? AND ref_code IS NULL",
+            (code, user_id),
+        )
+        await self.conn.commit()
+
+    async def get_ref_code(self, user_id: int) -> str | None:
+        async with self.conn.execute(
+            "SELECT ref_code FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row["ref_code"] if row and row["ref_code"] else None
+
+    async def user_by_ref_code(self, code: str) -> int | None:
+        async with self.conn.execute(
+            "SELECT user_id FROM users WHERE ref_code = ?", (code,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["user_id"]) if row else None
+
+    async def referrer_of(self, user_id: int) -> int | None:
+        async with self.conn.execute(
+            "SELECT referred_by FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["referred_by"]) if row and row["referred_by"] else None
+
+    async def bind_referrer(self, user_id: int, referrer_id: int) -> bool:
+        await self.ensure_user(user_id)
+        cursor = await self.conn.execute(
+            "UPDATE users SET referred_by = ? WHERE user_id = ? AND referred_by IS NULL",
+            (referrer_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def referral_count(self, user_id: int) -> int:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE referred_by = ?", (user_id,)
+        ) as cursor:
+            return int((await cursor.fetchone())["n"])
+
     async def audience(self, active_since: datetime) -> dict:
         moment = active_since.isoformat(timespec="seconds")
         async with self.conn.execute(
@@ -453,7 +593,9 @@ CREATE TABLE IF NOT EXISTS users (
     last_overall  DOUBLE PRECISION NOT NULL DEFAULT 0,
     sum_overall   DOUBLE PRECISION NOT NULL DEFAULT 0,
     declared_age  INTEGER,
-    onboarded_at  TIMESTAMPTZ
+    onboarded_at  TIMESTAMPTZ,
+    ref_code      TEXT UNIQUE,
+    referred_by   BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -479,6 +621,22 @@ CREATE TABLE IF NOT EXISTS habits (
     day     TEXT    NOT NULL,
     mask    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS xp_events (
+    user_id    BIGINT  NOT NULL,
+    key        TEXT    NOT NULL,
+    amount     INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS purchases (
+    user_id    BIGINT  NOT NULL,
+    guide_id   TEXT    NOT NULL,
+    price      INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, guide_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ratings_user ON ratings(user_id);
@@ -728,6 +886,95 @@ class PostgresDatabase(BaseDatabase):
                 day,
                 mask,
             )
+
+    async def award_xp(self, user_id: int, key: str, amount: int) -> bool:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                INSERT INTO xp_events (user_id, key, amount) VALUES ($1, $2, $3)
+                ON CONFLICT DO NOTHING RETURNING key
+                """,
+                user_id, key, amount,
+            )
+        return row is not None
+
+    async def xp_balance(self, user_id: int) -> tuple[int, int]:
+        async with self.pool.acquire() as conn:
+            earned = await conn.fetchval(
+                "SELECT COALESCE(SUM(amount), 0) FROM xp_events WHERE user_id = $1",
+                user_id,
+            )
+            spent = await conn.fetchval(
+                "SELECT COALESCE(SUM(price), 0) FROM purchases WHERE user_id = $1",
+                user_id,
+            )
+        return int(earned or 0), int(spent or 0)
+
+    async def purchase(self, user_id: int, guide_id: str, price: int) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                INSERT INTO purchases (user_id, guide_id, price) VALUES ($1, $2, $3)
+                ON CONFLICT DO NOTHING RETURNING guide_id
+                """,
+                user_id, guide_id, price,
+            )
+        return row is not None
+
+    async def purchased(self, user_id: int) -> set[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT guide_id FROM purchases WHERE user_id = $1", user_id
+            )
+        return {row["guide_id"] for row in rows}
+
+    async def set_ref_code(self, user_id: int, code: str) -> None:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET ref_code = $1 WHERE user_id = $2 AND ref_code IS NULL",
+                code, user_id,
+            )
+
+    async def get_ref_code(self, user_id: int) -> str | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT ref_code FROM users WHERE user_id = $1", user_id
+            )
+
+    async def user_by_ref_code(self, code: str) -> int | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT user_id FROM users WHERE ref_code = $1", code
+            )
+        return int(value) if value else None
+
+    async def referrer_of(self, user_id: int) -> int | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT referred_by FROM users WHERE user_id = $1", user_id
+            )
+        return int(value) if value else None
+
+    async def bind_referrer(self, user_id: int, referrer_id: int) -> bool:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE users SET referred_by = $1
+                 WHERE user_id = $2 AND referred_by IS NULL
+                """,
+                referrer_id, user_id,
+            )
+        return result.endswith("1")
+
+    async def referral_count(self, user_id: int) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE referred_by = $1", user_id
+            )
+        return int(value or 0)
 
     async def audience(self, active_since: datetime) -> dict:
         async with self.pool.acquire() as conn:

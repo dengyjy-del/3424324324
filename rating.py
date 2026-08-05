@@ -43,13 +43,15 @@ class ScoreProfile:
     param_spread: float
 
 
-# Обычный режим: общий балл 5.0-7.4, центр ~6.15.
+# Запасной режим, когда распознавание не сработало. Держится в тех же
+# рамках, что и оценки по замерам, иначе один и тот же человек получал бы
+# заметно разные баллы в зависимости от того, загрузилась модель или нет.
 NORMAL = ScoreProfile(
     key="normal",
-    overall_min=5.0,
-    overall_max=7.4,
-    overall_center=6.15,
-    overall_sigma=0.55,
+    overall_min=4.2,
+    overall_max=7.0,
+    overall_center=5.5,
+    overall_sigma=0.6,
     param_min=3.6,
     param_max=9.3,
     param_spread=1.15,
@@ -477,7 +479,7 @@ def _bell(value: float, center: float, sigma: float) -> float:
 # анатомическую норму, упиралось в 8-9, и высокий балл переставал что-либо
 # значить. Подобрана так, чтобы типичное лицо давало около 6, а верхние
 # оценки доставались действительно редким сочетаниям пропорций.
-SCORE_GAMMA = 2.25
+SCORE_GAMMA = 4.5
 
 
 def _to_score(quality: float) -> float:
@@ -494,13 +496,13 @@ def _to_score(quality: float) -> float:
 # загнали бы в нижний балл всех подряд — а это ровно то, чего не должно
 # случаться с продуктом для подростков.
 QUALITY_RULES = {
-    "canthal_tilt": lambda m: _bell(m.canthal_tilt, 6.5, 8.0),
-    "hunter_eyes": lambda m: _bell(m.eye_aspect, 0.35, 0.11),
-    "jawline": lambda m: _bell(m.jaw_ratio, 0.78, 0.12),
-    "gonial_angle": lambda m: _bell(m.gonial_angle, 128.0, 20.0),
-    "cheekbones": lambda m: _bell(m.fwhr, 1.95, 0.36),
-    "chin": lambda m: _bell(m.chin_ratio, 0.34, 0.062),
-    "nose": lambda m: _bell(m.nose_ratio, 0.26, 0.068),
+    "canthal_tilt": lambda m: _bell(m.canthal_tilt, 6.5, 5.6),
+    "hunter_eyes": lambda m: _bell(m.eye_aspect, 0.35, 0.077),
+    "jawline": lambda m: _bell(m.jaw_ratio, 0.78, 0.084),
+    "gonial_angle": lambda m: _bell(m.gonial_angle, 128.0, 14.0),
+    "cheekbones": lambda m: _bell(m.fwhr, 1.95, 0.252),
+    "chin": lambda m: _bell(m.chin_ratio, 0.34, 0.0434),
+    "nose": lambda m: _bell(m.nose_ratio, 0.26, 0.0476),
     "symmetry": lambda m: _clamp((m.symmetry - 0.90) / 0.085, 0.0, 1.0),
     "proportions": lambda m: _clamp(m.thirds_balance, 0.0, 1.0),
 }

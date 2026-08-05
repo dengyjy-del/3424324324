@@ -425,3 +425,32 @@ def audience(data: dict, days: int) -> str:
 
     lines += ["", "<i>Возраст указывают сами пользователи при первом входе.</i>"]
     return "\n".join(lines)
+
+
+# ───────────────────────── реферальная программа ───────────────────────────
+
+
+def referral(code: str, invited: int) -> str:
+    from engagement import XP_REFERRAL, XP_REFERRAL_BONUS
+
+    return (
+        "🎁 <b>ПРИГЛАШАЙ ДРУЗЕЙ</b>\n"
+        f"{LINE}\n"
+        "Твой код:\n"
+        f"<code>{safe(code)}</code>\n"
+        f"{LINE}\n"
+        f"За каждого, кто введёт его — <b>+{XP_REFERRAL} XP</b> тебе\n"
+        f"Другу при вводе — <b>+{XP_REFERRAL_BONUS} XP</b>\n"
+        f"{LINE}\n"
+        f"Приглашено: <b>{invited}</b>\n"
+        "<i>Друг вводит команду /ref и код через пробел. "
+        "XP тратятся на платные гайды в приложении.</i>"
+    )
+
+
+def ref_applied(bonus: int) -> str:
+    return (
+        "✅ <b>Код принят</b>\n"
+        f"Тебе начислено <b>+{bonus} XP</b>. Пригласивший тоже получил награду.\n"
+        "<i>Копи XP за ежедневные привычки и открывай гайды в приложении.</i>"
+    )
