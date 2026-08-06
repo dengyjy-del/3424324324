@@ -185,5 +185,5 @@ def load_config() -> Config:
         webapp_host=(os.getenv("WEBAPP_HOST") or "0.0.0.0").strip(),
         webapp_port=int(_get_float("WEBAPP_PORT", 8080)),
         min_age=int(_get_float("MIN_AGE", 16)),
-        daily_scan_limit=int(_get_float("DAILY_SCAN_LIMIT", 3)),
+        daily_scan_limit=int(_get_float("DAILY_SCAN_LIMIT", 5)),
     )

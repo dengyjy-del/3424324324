@@ -201,6 +201,20 @@ function renderToday(data) {
     `<div style="min-width:0"><h3>Отчёты сегодня</h3>` +
     `<p class="tiny" style="margin-top:3px">${quotaText}</p></div>${quotaDots}`;
 
+  // Докупка появляется, только когда попытки на исходе — иначе кнопка
+  // мозолит глаза тем, кто и так не исчерпал лимит.
+  const buyBox = $("td-buy-scan");
+  const showBuy = !scans.unlimited && scans.left === 0 && scans.can_buy;
+  buyBox.classList.toggle("hidden", !showBuy);
+  if (showBuy) {
+    buyBox.innerHTML =
+      `<div style="min-width:0"><h3>Нужна ещё попытка?</h3>` +
+      `<p class="tiny" style="margin-top:3px">Докупить можно за ` +
+      `${scans.extra_price} XP</p></div>` +
+      `<button class="shop-price" id="buy-scan-btn">${scans.extra_price} XP</button>`;
+    $("buy-scan-btn").addEventListener("click", buyScan);
+  }
+
   const xp = data.xp || { balance: 0 };
   $("td-xp").innerHTML =
     `<div style="min-width:0"><h3>Твои XP</h3>` +
@@ -217,6 +231,18 @@ function renderToday(data) {
       </div>`
     )
     .join("");
+}
+
+async function buyScan() {
+  haptic("medium");
+  try {
+    await api("/api/buy-scan", { method: "POST" });
+    notifySuccess();
+    toast("Попытка добавлена");
+    loadToday();
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function loadToday() {

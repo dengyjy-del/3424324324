@@ -135,6 +135,10 @@ class BaseDatabase(ABC):
     async def purchased(self, user_id: int) -> set[str]: ...
 
     @abstractmethod
+    async def count_purchases(self, user_id: int, prefix: str) -> int:
+        """Сколько покупок с таким префиксом (нужно для докупки попыток)."""
+
+    @abstractmethod
     async def set_ref_code(self, user_id: int, code: str) -> None: ...
 
     @abstractmethod
@@ -496,6 +500,13 @@ class SQLiteDatabase(BaseDatabase):
             "SELECT guide_id FROM purchases WHERE user_id = ?", (user_id,)
         ) as cursor:
             return {row["guide_id"] for row in await cursor.fetchall()}
+
+    async def count_purchases(self, user_id: int, prefix: str) -> int:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM purchases WHERE user_id = ? AND guide_id LIKE ?",
+            (user_id, prefix + "%"),
+        ) as cursor:
+            return int((await cursor.fetchone())["n"])
 
     async def set_ref_code(self, user_id: int, code: str) -> None:
         await self.ensure_user(user_id)
@@ -978,6 +989,14 @@ class PostgresDatabase(BaseDatabase):
                 "SELECT guide_id FROM purchases WHERE user_id = $1", user_id
             )
         return {row["guide_id"] for row in rows}
+
+    async def count_purchases(self, user_id: int, prefix: str) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT COUNT(*) FROM purchases WHERE user_id = $1 AND guide_id LIKE $2",
+                user_id, prefix + "%",
+            )
+        return int(value or 0)
 
     async def set_ref_code(self, user_id: int, code: str) -> None:
         await self.ensure_user(user_id)

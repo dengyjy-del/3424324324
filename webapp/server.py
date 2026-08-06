@@ -191,14 +191,16 @@ def create_app(
         # владельцу лимит мешал бы снимать контент и проверять сборки.
         in_demo_check = await demo.is_active(user.id)
         if not in_demo_check and not config.is_admin(user.id):
+            today_key = date.today().isoformat()
+            bought = await db.count_purchases(user.id, f"scan:{today_key}:")
             used = await db.count_ratings_since(user.id, _day_start())
-            if used >= config.daily_scan_limit:
+            if used >= config.daily_scan_limit + bought:
                 raise HTTPException(
                     status_code=429,
                     detail=(
-                        f"На сегодня отчёты закончились ({config.daily_scan_limit} "
-                        "в сутки). Новые будут доступны после полуночи — "
-                        "загляни отметить привычки."
+                        "Отчёты на сегодня закончились. Можно докупить попытку "
+                        f"за {engagement.EXTRA_SCAN_PRICE} XP или вернуться "
+                        "после полуночи."
                     ),
                 )
 
@@ -315,7 +317,7 @@ def create_app(
 
     @app.get("/api/guides")
     async def guides(user: TelegramUser = Depends(current_user)) -> dict:
-        owned = await db.purchased(user.id)
+        owned = {g for g in await db.purchased(user.id) if not g.startswith("scan:")}
         earned, spent = await db.xp_balance(user.id)
         unlimited = config.is_admin(user.id)
 
@@ -366,6 +368,35 @@ def create_app(
             return {"ok": True, "already": True}
 
         return {"ok": True, "balance": earned - spent - (0 if free else guide.price)}
+
+    @app.post("/api/buy-scan")
+    async def buy_scan(user: TelegramUser = Depends(current_user)) -> dict:
+        """Докупка одной попытки за XP."""
+        await _require_subscription(user.id)
+
+        if config.is_admin(user.id):
+            return {"ok": True, "unlimited": True}
+
+        today_key = date.today().isoformat()
+        bought = await db.count_purchases(user.id, f"scan:{today_key}:")
+
+        if bought >= engagement.EXTRA_SCANS_PER_DAY:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Больше {engagement.EXTRA_SCANS_PER_DAY} докупок в день нельзя",
+            )
+
+        earned, spent = await db.xp_balance(user.id)
+        price = engagement.EXTRA_SCAN_PRICE
+        if earned - spent < price:
+            raise HTTPException(
+                status_code=402, detail=f"Не хватает {price - (earned - spent)} XP"
+            )
+
+        if not await db.purchase(user.id, f"scan:{today_key}:{bought + 1}", price):
+            raise HTTPException(status_code=409, detail="Попробуй ещё раз")
+
+        return {"ok": True, "balance": earned - spent - price}
 
     @app.get("/api/referral")
     async def referral(user: TelegramUser = Depends(current_user)) -> dict:
@@ -418,6 +449,7 @@ def create_app(
         earned, spent = await db.xp_balance(user_id)
         used_today = await db.count_ratings_since(user_id, _day_start())
         unlimited = config.is_admin(user_id)
+        extra = await db.count_purchases(user_id, f"scan:{today_date.isoformat()}:")
 
         return {
             "date": today_date.isoformat(),
@@ -450,9 +482,12 @@ def create_app(
             },
             "scans": {
                 "used": used_today,
-                "limit": config.daily_scan_limit,
-                "left": max(0, config.daily_scan_limit - used_today),
+                "limit": config.daily_scan_limit + extra,
+                "left": max(0, config.daily_scan_limit + extra - used_today),
                 "unlimited": unlimited,
+                "extra": extra,
+                "extra_price": engagement.EXTRA_SCAN_PRICE,
+                "can_buy": extra < engagement.EXTRA_SCANS_PER_DAY,
             },
             "xp": {
                 "balance": earned - spent,
