@@ -17,6 +17,7 @@ const state = {
   brand: "LOOKSCORE",
   botUsername: "",
   report: null,
+  lastScan: null,
   cardTheme: 0,
   refCode: "",
   guides: [],
@@ -651,6 +652,8 @@ async function runScan(rawFile) {
     }
 
     const report = await request;
+    // Нужно для оценки от пользователя: те же замеры, тот же снимок
+    state.lastScan = found ? { hash: await sha256(file), metrics: found.metrics } : null;
     loadToday();
     $("scan-label").textContent = "Готово";
     $("scan-pct").textContent = "100%";
@@ -680,6 +683,10 @@ function countUp(element, target, duration = 1300) {
 function renderReport(report) {
   setScanState("result");
   state.report = report;
+  // Своя оценка возможна только там, где лицо действительно распозналось
+  $("fb-card").classList.toggle("hidden", !state.lastScan);
+  $("fb-range").value = report.overall;
+  $("fb-value").textContent = report.overall.toFixed(1);
 
   const circumference = 2 * Math.PI * 94;
   const ring = $("ring-value");
@@ -728,6 +735,32 @@ function renderReport(report) {
         `<p class="tiny" style="margin-top:4px">${tip.text}</p></div>`
     )
     .join("");
+}
+
+function initFeedback() {
+  $("fb-range").addEventListener("input", (event) => {
+    $("fb-value").textContent = Number(event.target.value).toFixed(1);
+  });
+
+  $("fb-send").addEventListener("click", async () => {
+    if (!state.lastScan) return;
+    haptic("medium");
+
+    const body = new FormData();
+    body.append("photo_hash", state.lastScan.hash);
+    body.append("score", $("fb-range").value);
+    body.append("metrics", JSON.stringify(state.lastScan.metrics));
+
+    try {
+      await api("/api/feedback", { method: "POST", body });
+      notifySuccess();
+      toast("Спасибо, учтём. +3 XP");
+      $("fb-card").classList.add("hidden");
+      loadToday();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 }
 
 function initScan() {
@@ -1312,6 +1345,7 @@ async function boot() {
   initShare();
   initReferral();
   initLabeling();
+  initFeedback();
   initScan();
   initSegments();
 

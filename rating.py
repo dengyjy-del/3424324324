@@ -454,6 +454,13 @@ class FaceMetrics:
     oval_flat: float = 0.62
     brow_proj: float = 0.04
 
+    # Признаки по пикселям: геометрия о них ничего не знает.
+    # Брови Face Mesh размечает по шаблону даже там, где их нет, поэтому
+    # выраженность брови видна только через контраст со лбом.
+    brow_contrast: float = 0.10
+    skin_variance: float = 0.11
+    skin_redness: float = 0.35
+
     @classmethod
     def from_payload(cls, data: dict) -> "FaceMetrics":
         def number(key: str, low: float, high: float) -> float:
@@ -499,6 +506,9 @@ class FaceMetrics:
                     ("chin_proj", -0.5, 1.2, 0.20),
                     ("oval_flat", 0.1, 1.8, 0.62),
                     ("brow_proj", -0.4, 0.6, 0.04),
+                    ("brow_contrast", 0.0, 1.0, 0.10),
+                    ("skin_variance", 0.0, 1.0, 0.11),
+                    ("skin_redness", -1.0, 2.0, 0.35),
                 )
             },
         )

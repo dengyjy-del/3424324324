@@ -205,6 +205,94 @@ export function computeMetrics(landmarks, width, height) {
   };
 }
 
+/* ── признаки по пикселям ────────────────────────────────── */
+
+/**
+ * То, чего не видно в координатах точек.
+ *
+ * Face Mesh ставит точки бровей по шаблону — даже там, где брови нет
+ * вовсе. Поэтому её выраженность определяется не геометрией, а тем,
+ * насколько эта область темнее кожи. Так же и с кожей: неровности
+ * и покраснения живут в пикселях, а не в разметке.
+ */
+function pixelFeatures(image, landmarks) {
+  const W = 260;
+  const canvas = document.createElement("canvas");
+  const scale = W / (image.naturalWidth || image.width);
+  canvas.width = W;
+  canvas.height = Math.round((image.naturalHeight || image.height) * scale);
+
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  } catch (_) {
+    return null; // изображение из другого источника — пиксели недоступны
+  }
+
+  const at = (index) => ({
+    x: Math.round(landmarks[index].x * canvas.width),
+    y: Math.round(landmarks[index].y * canvas.height),
+  });
+
+  /** Средняя яркость, её разброс и краснота в круге вокруг точки. */
+  function patch(center, radius) {
+    let n = 0, sum = 0, sumSq = 0, red = 0;
+    const r = Math.max(2, Math.round(radius));
+    for (let dy = -r; dy <= r; dy += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const x = center.x + dx;
+        const y = center.y + dy;
+        if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) continue;
+        const i = (y * canvas.width + x) * 4;
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        sum += lum;
+        sumSq += lum * lum;
+        red += data[i] - (data[i + 1] + data[i + 2]) / 2;
+        n += 1;
+      }
+    }
+    if (!n) return { mean: 0, sd: 0, red: 0 };
+    const mean = sum / n;
+    return {
+      mean,
+      sd: Math.sqrt(Math.max(0, sumSq / n - mean * mean)),
+      red: red / n,
+    };
+  }
+
+  const faceW = Math.abs(at(454).x - at(234).x) || 1;
+  const unit = faceW * 0.055;
+
+  // Брови против кожи под ними: чем темнее бровь, тем выше контраст
+  const browL = patch(at(105), unit);
+  const browR = patch(at(334), unit);
+  // Сравниваем со лбом НАД бровью: под бровью уже начинается тень века,
+  // и она темнее самой брови — контраст выходил нулевым.
+  const foreL = patch({ x: at(105).x, y: at(105).y - unit * 2.0 }, unit);
+  const foreR = patch({ x: at(334).x, y: at(334).y - unit * 2.0 }, unit);
+  const skinRef = (foreL.mean + foreR.mean) / 2 || 1;
+  const browMean = (browL.mean + browR.mean) / 2;
+
+  // Кожа: щёки и лоб
+  const cheekL = patch({ x: (at(234).x + at(1).x) / 2, y: at(234).y }, unit * 1.3);
+  const cheekR = patch({ x: (at(454).x + at(1).x) / 2, y: at(454).y }, unit * 1.3);
+  const forehead = patch({ x: at(10).x, y: at(10).y + unit * 2.2 }, unit * 1.3);
+  const skinMean = (cheekL.mean + cheekR.mean + forehead.mean) / 3 || 1;
+
+  return {
+    // 0 — брови не отличаются от кожи, 0.5 и выше — выраженные тёмные брови
+    brow_contrast: Math.max(0, (skinRef - browMean) / skinRef),
+    // разброс яркости кожи: неровности, высыпания, тени
+    skin_variance: ((cheekL.sd + cheekR.sd + forehead.sd) / 3) / skinMean,
+    // краснота относительно общей яркости: воспаления и раздражение
+    skin_redness: ((cheekL.red + cheekR.red + forehead.red) / 3) / skinMean,
+  };
+}
+
 /** Находит лицо на изображении. Возвращает null, если лица нет. */
 export async function analyseImage(imageElement) {
   const detector = await ensureDetector();
@@ -217,9 +305,12 @@ export async function analyseImage(imageElement) {
   const width = imageElement.naturalWidth || imageElement.width;
   const height = imageElement.naturalHeight || imageElement.height;
 
+  const metrics = computeMetrics(faces[0], width, height);
+  const pixels = pixelFeatures(imageElement, faces[0]);
+
   return {
     landmarks: faces[0],
-    metrics: computeMetrics(faces[0], width, height),
+    metrics: pixels ? { ...metrics, ...pixels } : metrics,
   };
 }
 

@@ -428,6 +428,37 @@ def create_app(
         stats = await db.label_stats()
         return {"ok": True, "added": added, "total": stats["total"]}
 
+    @app.post("/api/feedback")
+    async def feedback(
+        photo_hash: str = Form(...),
+        score: float = Form(...),
+        metrics: str = Form(...),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        """
+        Оценка от самого пользователя: «а сколько бы поставил ты».
+
+        Даёт обучающие данные без единой фотографии на сервере — приходят
+        те же замеры и человеческое число. Помечаем источником "u", чтобы
+        при обучении отделять от разметки владельца: люди систематически
+        завышают себе, и этот сдвиг надо вычитать, а не выучивать.
+        """
+        await _require_age(user.id)
+
+        if not 0.0 <= score <= 10.0:
+            raise HTTPException(status_code=400, detail="Балл от 0 до 10")
+        if not re.fullmatch(r"[0-9a-f]{16,64}", photo_hash or ""):
+            raise HTTPException(status_code=400, detail="Некорректный снимок")
+
+        try:
+            rating.FaceMetrics.from_payload(json.loads(metrics))
+        except (ValueError, json.JSONDecodeError):
+            raise HTTPException(status_code=422, detail="Замеры не разобрать") from None
+
+        await db.add_label(f"u:{photo_hash[:30]}", round(score, 2), metrics)
+        await db.award_xp(user.id, f"feedback:{photo_hash[:16]}", 3)
+        return {"ok": True}
+
     @app.get("/api/labels")
     async def labels(
         export: int = 0, user: TelegramUser = Depends(current_user)
