@@ -301,13 +301,23 @@ function pixelFeatures(image, landmarks) {
   const forehead = patch({ x: at(10).x, y: at(10).y + unit * 2.2 }, unit * 1.3);
   const skinMean = (cheekL.mean + cheekR.mean + forehead.mean) / 3 || 1;
 
+  // Любая из областей может оказаться за границей кадра, и тогда счёт
+  // вырождается. Отдавать наружу не-число нельзя: оно молча превращается
+  // в null при сериализации и портит обучающую выборку.
+  const safe = (value, fallback) =>
+    Number.isFinite(value) ? value : fallback;
+
   return {
     // 0 — брови не отличаются от кожи, 0.5 и выше — выраженные тёмные брови
-    brow_contrast: Math.max(0, (skinRef - browMean) / skinRef),
+    brow_contrast: safe(Math.max(0, (skinRef - browMean) / skinRef), 0.1),
     // разброс яркости кожи: неровности, высыпания, тени
-    skin_variance: ((cheekL.sd + cheekR.sd + forehead.sd) / 3) / skinMean,
+    skin_variance: safe(
+      ((cheekL.sd + cheekR.sd + forehead.sd) / 3) / skinMean, 0.11
+    ),
     // краснота относительно общей яркости: воспаления и раздражение
-    skin_redness: ((cheekL.red + cheekR.red + forehead.red) / 3) / skinMean,
+    skin_redness: safe(
+      ((cheekL.red + cheekR.red + forehead.red) / 3) / skinMean, 0.35
+    ),
   };
 }
 

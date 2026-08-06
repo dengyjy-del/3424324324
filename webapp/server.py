@@ -12,6 +12,7 @@ initData проверяется на каждом запросе, состоян
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -420,9 +421,13 @@ def create_app(
 
         try:
             payload = json.loads(metrics)
-            rating.FaceMetrics.from_payload(payload)
+            checked = rating.FaceMetrics.from_payload(payload)
         except (ValueError, json.JSONDecodeError):
             raise HTTPException(status_code=422, detail="Замеры не разобрать") from None
+
+        # Сохраняем разобранные значения, а не присланные: from_payload уже
+        # подставил разумные величины вместо пустых и вышедших за диапазон.
+        metrics = json.dumps(dataclasses.asdict(checked))
 
         try:
             added = await db.add_label(photo_hash[:32], round(score, 2), metrics)
