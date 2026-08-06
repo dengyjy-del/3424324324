@@ -216,6 +216,37 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("gift"))
+async def cmd_gift(message: Message, db: Database, config: Config) -> None:
+    """
+    /gift 5 — подарить всем пользователям дополнительные попытки на сегодня.
+
+    Работает как надбавка к суточному лимиту, а не как выдача каждому по
+    отдельности: так подарок достанется и тем, кто зайдёт позже, а в полночь
+    он сам сойдёт на нет вместе со сбросом счётчика.
+    """
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    amount = 5
+    if len(parts) > 1:
+        try:
+            amount = int(parts[1].strip())
+        except ValueError:
+            await message.answer(texts.GIFT_USAGE)
+            return
+
+    if not 0 <= amount <= 50:
+        await message.answer(texts.GIFT_USAGE)
+        return
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    await db.set_setting(f"gift_scans:{today}", str(amount))
+    await message.answer(texts.gift_done(amount, config.daily_scan_limit))
+
+
 @router.message(Command("labels"))
 async def cmd_labels(message: Message, db: Database, config: Config) -> None:
     """Сколько собрано размеченных примеров. Только для владельца."""

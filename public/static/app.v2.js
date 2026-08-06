@@ -185,10 +185,11 @@ function renderToday(data) {
   });
 
   const scans = data.scans;
+  const gift = scans.gift ? ` · +${scans.gift} в подарок` : "";
   const quotaText = scans.unlimited
     ? `Без ограничений · собрано сегодня: ${scans.used}`
     : scans.left > 0
-      ? `Осталось ${scans.left} из ${scans.limit}`
+      ? `Осталось ${scans.left} из ${scans.limit}${gift}`
       : "Лимит исчерпан, новые после полуночи";
 
   const quotaDots = scans.unlimited

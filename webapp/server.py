@@ -195,8 +195,9 @@ def create_app(
         if not in_demo_check and not config.is_admin(user.id):
             today_key = date.today().isoformat()
             bought = await db.count_purchases(user.id, f"scan:{today_key}:")
+            gift = await _gift_scans()
             used = await db.count_ratings_since(user.id, _day_start())
-            if used >= config.daily_scan_limit + bought:
+            if used >= config.daily_scan_limit + bought + gift:
                 raise HTTPException(
                     status_code=429,
                     detail=(
@@ -506,6 +507,20 @@ def create_app(
 
     # ─────────────────────────── хелперы ───────────────────────────────
 
+    async def _gift_scans() -> int:
+        """
+        Сколько бесплатных попыток владелец подарил всем на сегодня.
+
+        Хранится одним значением на дату, а не начислением каждому: подарок
+        достаётся и тем, кто зайдёт позже, и сам сходит на нет в полночь
+        вместе со сбросом счётчика.
+        """
+        value = await db.get_setting(f"gift_scans:{date.today().isoformat()}")
+        try:
+            return max(0, min(50, int(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
     def _day_start() -> datetime:
         """Полночь по UTC: с неё считается суточный лимит отчётов."""
         return datetime.now(timezone.utc).replace(
@@ -536,6 +551,7 @@ def create_app(
         used_today = await db.count_ratings_since(user_id, _day_start())
         unlimited = config.is_admin(user_id)
         extra = await db.count_purchases(user_id, f"scan:{today_date.isoformat()}:")
+        gift = await _gift_scans()
 
         return {
             "date": today_date.isoformat(),
@@ -568,8 +584,9 @@ def create_app(
             },
             "scans": {
                 "used": used_today,
-                "limit": config.daily_scan_limit + extra,
-                "left": max(0, config.daily_scan_limit + extra - used_today),
+                "limit": config.daily_scan_limit + extra + gift,
+                "left": max(0, config.daily_scan_limit + extra + gift - used_today),
+                "gift": gift,
                 "unlimited": unlimited,
                 "extra": extra,
                 "extra_price": engagement.EXTRA_SCAN_PRICE,

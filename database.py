@@ -142,6 +142,12 @@ class BaseDatabase(ABC):
     async def label_stats(self) -> dict: ...
 
     @abstractmethod
+    async def set_setting(self, key: str, value: str) -> None: ...
+
+    @abstractmethod
+    async def get_setting(self, key: str) -> str | None: ...
+
+    @abstractmethod
     async def diagnose_labels(self) -> dict:
         """Прямая проверка таблицы разметки: что реально лежит в базе."""
 
@@ -238,6 +244,13 @@ CREATE TABLE IF NOT EXISTS labels (
     score      REAL    NOT NULL,
     metrics    TEXT    NOT NULL,
     created_at TEXT    NOT NULL
+);
+
+-- Общие значения: подарочные сканы на день и подобное
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS xp_events (
@@ -559,6 +572,24 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+    async def set_setting(self, key: str, value: str) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE
+               SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, _now_iso()),
+        )
+        await self.conn.commit()
+
+    async def get_setting(self, key: str) -> str | None:
+        async with self.conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row["value"] if row else None
+
     async def diagnose_labels(self) -> dict:
         info = {"backend": "sqlite", "target": self._path}
         try:
@@ -752,6 +783,12 @@ CREATE TABLE IF NOT EXISTS labels (
     score      DOUBLE PRECISION NOT NULL,
     metrics    TEXT   NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS xp_events (
@@ -1105,6 +1142,21 @@ class PostgresDatabase(BaseDatabase):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT photo_id, score, metrics FROM labels ORDER BY id")
         return [dict(r) for r in rows]
+
+    async def set_setting(self, key: str, value: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO settings (key, value) VALUES ($1, $2)
+                ON CONFLICT (key) DO UPDATE
+                   SET value = EXCLUDED.value, updated_at = NOW()
+                """,
+                key, value,
+            )
+
+    async def get_setting(self, key: str) -> str | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT value FROM settings WHERE key = $1", key)
 
     async def diagnose_labels(self) -> dict:
         # Хост показываем без логина и пароля — по нему видно, та ли база
