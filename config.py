@@ -129,13 +129,22 @@ def _database_url() -> str:
 
 
 def _webapp_url() -> str:
-    """На Vercel домен известен только в рантайме — через VERCEL_URL."""
-    explicit = (os.getenv("WEBAPP_URL") or "").strip().rstrip("/")
-    if explicit:
-        return explicit
+    """
+    Публичный адрес приложения.
 
-    vercel = (os.getenv("VERCEL_URL") or "").strip()
-    return f"https://{vercel}" if vercel else ""
+    Порядок важен. VERCEL_URL — это адрес конкретного деплоя вида
+    project-a1b2c3-team.vercel.app: он меняется при каждой сборке, а Vercel
+    закрывает такие адреса защитой доступа, из-за чего Telegram не может
+    достучаться до вебхука. Постоянный домен лежит в
+    VERCEL_PROJECT_PRODUCTION_URL, его и берём.
+    """
+    for name in ("WEBAPP_URL", "VERCEL_PROJECT_PRODUCTION_URL", "VERCEL_URL"):
+        value = (os.getenv(name) or "").strip().rstrip("/")
+        if not value:
+            continue
+        return value if value.startswith("http") else f"https://{value}"
+
+    return ""
 
 
 def load_config() -> Config:
