@@ -223,6 +223,25 @@ async def cmd_labels(message: Message, db: Database, config: Config) -> None:
     if user is None or not config.admin_ids or not config.is_admin(user.id):
         return
 
+    # Пробная запись и чтение в одном месте: показывает, где рвётся цепочка
+    if (message.text or "").strip().endswith("debug"):
+        info = await db.diagnose_labels()
+        probe = f"probe:{int(datetime.now(timezone.utc).timestamp())}"
+        try:
+            written = await db.add_label(probe, 5.0, '{"probe":1}')
+            after = await db.diagnose_labels()
+            info["probe_written"] = written
+            info["rows_after_probe"] = after.get("rows")
+        except Exception as error:  # noqa: BLE001
+            info["probe_error"] = f"{type(error).__name__}: {str(error)[:100]}"
+
+        lines = ["🔬 <b>ДИАГНОСТИКА РАЗМЕТКИ</b>", texts.LINE]
+        for key, value in info.items():
+            shown = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+            lines.append(f"<code>{key}</code>: {texts.safe(shown[:110] or '—')}")
+        await message.answer("\n".join(lines))
+        return
+
     # Ошибку показываем, а не прячем: раньше сбой чтения выглядел как
     # «разметки нет», и было непонятно, потерялись данные или нет.
     try:

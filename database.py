@@ -142,6 +142,10 @@ class BaseDatabase(ABC):
     async def label_stats(self) -> dict: ...
 
     @abstractmethod
+    async def diagnose_labels(self) -> dict:
+        """Прямая проверка таблицы разметки: что реально лежит в базе."""
+
+    @abstractmethod
     async def export_labels(self) -> list[dict]: ...
 
     @abstractmethod
@@ -554,6 +558,25 @@ class SQLiteDatabase(BaseDatabase):
             "SELECT photo_id, score, metrics FROM labels ORDER BY id"
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+    async def diagnose_labels(self) -> dict:
+        info = {"backend": "sqlite", "target": self._path}
+        try:
+            async with self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='labels'"
+            ) as cursor:
+                info["table_exists"] = bool(await cursor.fetchone())
+            async with self.conn.execute("SELECT COUNT(*) AS n FROM labels") as cursor:
+                info["rows"] = int((await cursor.fetchone())["n"])
+            async with self.conn.execute(
+                "SELECT photo_id, score FROM labels ORDER BY id DESC LIMIT 3"
+            ) as cursor:
+                info["last"] = [
+                    f"{r['photo_id'][:10]}…={r['score']}" for r in await cursor.fetchall()
+                ]
+        except Exception as error:  # noqa: BLE001
+            info["error"] = f"{type(error).__name__}: {error}"
+        return info
 
     async def count_purchases(self, user_id: int, prefix: str) -> int:
         async with self.conn.execute(
@@ -1082,6 +1105,25 @@ class PostgresDatabase(BaseDatabase):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT photo_id, score, metrics FROM labels ORDER BY id")
         return [dict(r) for r in rows]
+
+    async def diagnose_labels(self) -> dict:
+        # Хост показываем без логина и пароля — по нему видно, та ли база
+        host = self._dsn.split("@")[-1].split("/")[0] if "@" in self._dsn else "?"
+        info = {"backend": "postgres", "target": host}
+        try:
+            async with self.pool.acquire() as conn:
+                info["table_exists"] = bool(
+                    await conn.fetchval("SELECT to_regclass('public.labels')")
+                )
+                info["rows"] = int(await conn.fetchval("SELECT COUNT(*) FROM labels") or 0)
+                rows = await conn.fetch(
+                    "SELECT photo_id, score FROM labels ORDER BY id DESC LIMIT 3"
+                )
+                info["last"] = [f"{r['photo_id'][:10]}…={r['score']}" for r in rows]
+                info["db"] = await conn.fetchval("SELECT current_database()")
+        except Exception as error:  # noqa: BLE001
+            info["error"] = f"{type(error).__name__}: {error}"
+        return info
 
     async def count_purchases(self, user_id: int, prefix: str) -> int:
         async with self.pool.acquire() as conn:
