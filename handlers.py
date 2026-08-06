@@ -236,6 +236,13 @@ async def cmd_labels(message: Message, db: Database, config: Config) -> None:
             info["probe_error"] = f"{type(error).__name__}: {str(error)[:100]}"
 
         lines = ["🔬 <b>ДИАГНОСТИКА РАЗМЕТКИ</b>", texts.LINE]
+        if info.get("backend") == "sqlite" and config.webapp_url:
+            lines += [
+                "⚠️ <b>Бот и приложение на разных базах.</b>",
+                "Бот пишет в локальный файл, приложение — в свою базу. "
+                "Разметка из приложения сюда не попадёт.",
+                texts.LINE,
+            ]
         for key, value in info.items():
             shown = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
             lines.append(f"<code>{key}</code>: {texts.safe(shown[:110] or '—')}")

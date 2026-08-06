@@ -318,7 +318,21 @@ else:
                 detail="Не задана переменная SETUP_KEY — добавь её в Vercel и передеплой",
             )
         if key != config.setup_key:
-            raise HTTPException(status_code=403, detail="Неверный ключ")
+            # Показываем ровно столько, чтобы владелец мог сверить свой ключ
+            # с тем, что реально лежит в переменных, но не сам ключ.
+            expected = config.setup_key
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Неверный ключ. В переменных Vercel лежит ключ длиной "
+                    f"{len(expected)} символов, начинающийся на "
+                    f"«{expected[:3]}» и заканчивающийся на «{expected[-2:]}». "
+                    f"Ты передал длину {len(key)}"
+                    + (f", начало «{key[:3]}»." if key else ".")
+                    + " Проверь SETUP_KEY в Settings → Environment Variables "
+                    "или перезапиши его и передеплой."
+                ),
+            )
 
         base = config.webapp_url
         if not base.startswith("https://"):

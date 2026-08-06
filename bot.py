@@ -39,6 +39,27 @@ COMMANDS = [
 ]
 
 
+def _warn_split_database(config: Config) -> None:
+    """
+    Локальный запуск с SQLite при живом мини-аппе означает две разные базы.
+
+    Симптом коварный: и бот, и приложение работают, но видят разные данные —
+    разметка уходит в одну базу, статистика читается из другой.
+    """
+    if config.uses_postgres or not config.webapp_url:
+        return
+
+    logger.warning("=" * 72)
+    logger.warning("ВНИМАНИЕ: бот работает на локальной базе %s", config.database_url)
+    logger.warning("А мини-апп по адресу %s — на своей.", config.webapp_url)
+    logger.warning("Данные будут расходиться: разметка, XP, серии и рефералы")
+    logger.warning("окажутся в разных местах.")
+    logger.warning("")
+    logger.warning("Чтобы база была общей, пропиши в локальный .env строку")
+    logger.warning("подключения Postgres из Vercel:  DATABASE_URL=postgresql://...")
+    logger.warning("=" * 72)
+
+
 def _log_setup(config: Config) -> None:
     if config.gate_enabled:
         logger.info("Гейт подписки: %s", config.channel_id)
@@ -96,6 +117,7 @@ async def run(config: Config) -> None:
         me = await bot.get_me()
         logger.info("Бот запущен: @%s", me.username)
         _log_setup(config)
+        _warn_split_database(config)
         if config.webapp_enabled:
             await bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(
