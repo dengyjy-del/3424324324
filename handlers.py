@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from datetime import datetime, timedelta, timezone
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    ChatMemberUpdated,
+    Message,
+    User,
+)
 
 import keyboards
 import rating
@@ -206,6 +213,30 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("labels"))
+async def cmd_labels(message: Message, db: Database, config: Config) -> None:
+    """Сколько собрано размеченных примеров. Только для владельца."""
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    stats = await db.label_stats()
+    rows = await db.export_labels()
+
+    if not stats["total"]:
+        await message.answer(texts.LABELS_EMPTY)
+        return
+
+    await message.answer(texts.label_stats(stats))
+
+    # Выгрузка файлом: его можно прислать мне для переобучения модели
+    payload = json.dumps(rows, ensure_ascii=False, indent=1).encode()
+    await message.answer_document(
+        BufferedInputFile(payload, filename="labels.json"),
+        caption="Выгрузка разметки. Пришли этот файл для переобучения модели.",
+    )
+
+
 @router.message(Command("referrals"))
 async def cmd_referrals(message: Message, db: Database, config: Config) -> None:
     """Сводка по приглашениям. Только для ID из ADMIN_IDS."""
@@ -300,6 +331,41 @@ async def _demo_report(message: Message, user: User, config: Config) -> None:
         await message.answer(card, reply_markup=markup)
 
 
+@router.my_chat_member()
+async def on_added(event: ChatMemberUpdated, config: Config) -> None:
+    """
+    Когда бота добавляют в группу или канал, он сразу присылает владельцу ID.
+
+    Это надёжнее пересылки: в чате обсуждений посты канала появляются
+    автоматическим репостом, и Telegram указывает источником канал, а не сам
+    чат. Именно из-за этого в CHAT_ID легко попадает ID канала.
+    """
+    chat = event.chat
+    if chat.type == "private" or not config.admin_ids:
+        return
+
+    status = event.new_chat_member.status
+    if status not in ("member", "administrator"):
+        return
+
+    kind = "канал" if chat.type == "channel" else "группа"
+    note = (
+        "Впиши в CHANNEL_ID" if chat.type == "channel" else "Впиши в CHAT_ID"
+    )
+    text = (
+        f"➕ <b>Бот добавлен: {texts.safe(chat.title or '—')}</b>\n"
+        f"Тип: {kind}\n"
+        f"ID: <code>{chat.id}</code>\n\n"
+        f"<i>{note}. Статус бота: {status}."
+        + ("" if status == "administrator" else " Для проверки подписки нужны права администратора.")
+        + "</i>"
+    )
+
+    for admin_id in config.admin_ids:
+        with contextlib.suppress(TelegramAPIError):
+            await event.bot.send_message(admin_id, text)
+
+
 @router.message(F.forward_origin)
 async def cmd_whereis(message: Message, config: Config) -> None:
     """Показывает ID источника пересланного сообщения. Только для владельца."""
@@ -318,11 +384,18 @@ async def cmd_whereis(message: Message, config: Config) -> None:
         return
 
     kind = "канал" if chat.type == "channel" else "группа"
+    hint = (
+        "<i>Это канал. Для CHAT_ID нужен чат обсуждений — но посты канала "
+        "попадают туда репостом, и пересылка такого сообщения всегда покажет "
+        "канал. Надёжнее: открой чат в web.telegram.org — ID будет в адресной "
+        "строке, либо добавь бота в чат заново, и он пришлёт ID сам.</i>"
+        if chat.type == "channel"
+        else "<i>Для проверки подписки на группу впиши это число в CHAT_ID.</i>"
+    )
     await message.answer(
         f"🆔 <b>{texts.safe(chat.title or '—')}</b>\n"
         f"Тип: {kind}\n"
-        f"ID: <code>{chat.id}</code>\n\n"
-        "<i>Для проверки подписки на группу впиши это число в CHAT_ID.</i>"
+        f"ID: <code>{chat.id}</code>\n\n" + hint
     )
 
 

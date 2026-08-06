@@ -139,6 +139,7 @@ def create_app(
             # Нужен для карточки «поделиться»: подпись не зашита в код,
             # поэтому при смене бота ничего править не придётся.
             "bot_username": await configured_bot_name(),
+            "is_admin": config.is_admin(user.id),
             "stats": _stats_payload(stats),
             "subscribed": await _is_subscribed(user.id),
             "channel": {
@@ -397,6 +398,47 @@ def create_app(
             raise HTTPException(status_code=409, detail="Попробуй ещё раз")
 
         return {"ok": True, "balance": earned - spent - price}
+
+    @app.post("/api/label")
+    async def add_label(
+        photo_hash: str = Form(...),
+        score: float = Form(...),
+        metrics: str = Form(...),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        """
+        Ручная разметка для обучения. Только для ID из ADMIN_IDS.
+
+        Фотография сюда не приходит и нигде не сохраняется: замеры считает
+        браузер, а на сервер уходят только числа и выставленный балл.
+        """
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+
+        if not 0.0 <= score <= 10.0:
+            raise HTTPException(status_code=400, detail="Балл от 0 до 10")
+
+        try:
+            payload = json.loads(metrics)
+            rating.FaceMetrics.from_payload(payload)
+        except (ValueError, json.JSONDecodeError):
+            raise HTTPException(status_code=422, detail="Замеры не разобрать") from None
+
+        added = await db.add_label(photo_hash[:32], round(score, 2), metrics)
+        stats = await db.label_stats()
+        return {"ok": True, "added": added, "total": stats["total"]}
+
+    @app.get("/api/labels")
+    async def labels(
+        export: int = 0, user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+
+        stats = await db.label_stats()
+        if export:
+            stats["rows"] = await db.export_labels()
+        return stats
 
     @app.get("/api/referral")
     async def referral(user: TelegramUser = Depends(current_user)) -> dict:

@@ -135,6 +135,16 @@ class BaseDatabase(ABC):
     async def purchased(self, user_id: int) -> set[str]: ...
 
     @abstractmethod
+    async def add_label(self, photo_id: str, score: float, metrics: str) -> bool:
+        """Сохраняет размеченный пример. False, если такой уже был."""
+
+    @abstractmethod
+    async def label_stats(self) -> dict: ...
+
+    @abstractmethod
+    async def export_labels(self) -> list[dict]: ...
+
+    @abstractmethod
     async def count_purchases(self, user_id: int, prefix: str) -> int:
         """Сколько покупок с таким префиксом (нужно для докупки попыток)."""
 
@@ -217,6 +227,15 @@ CREATE TABLE IF NOT EXISTS habits (
 
 -- Ключ события уникален, поэтому повторное начисление за то же действие
 -- в тот же день просто не проходит. Идемпотентность без блокировок.
+-- Обучающая выборка: только числа, без фотографий.
+CREATE TABLE IF NOT EXISTS labels (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id   TEXT    NOT NULL UNIQUE,
+    score      REAL    NOT NULL,
+    metrics    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS xp_events (
     user_id    INTEGER NOT NULL,
     key        TEXT    NOT NULL,
@@ -501,6 +520,41 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             return {row["guide_id"] for row in await cursor.fetchall()}
 
+    async def add_label(self, photo_id: str, score: float, metrics: str) -> bool:
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO labels (photo_id, score, metrics, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (photo_id, score, metrics, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def label_stats(self) -> dict:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n, AVG(score) AS avg FROM labels"
+        ) as cursor:
+            row = await cursor.fetchone()
+        async with self.conn.execute(
+            """
+              SELECT CAST(score AS INTEGER) AS bucket, COUNT(*) AS n
+                FROM labels GROUP BY bucket ORDER BY bucket
+            """
+        ) as cursor:
+            buckets = {int(r["bucket"]): int(r["n"]) for r in await cursor.fetchall()}
+        return {
+            "total": int(row["n"] or 0),
+            "average": round(float(row["avg"] or 0), 2),
+            "buckets": buckets,
+        }
+
+    async def export_labels(self) -> list[dict]:
+        async with self.conn.execute(
+            "SELECT photo_id, score, metrics FROM labels ORDER BY id"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
     async def count_purchases(self, user_id: int, prefix: str) -> int:
         async with self.conn.execute(
             "SELECT COUNT(*) AS n FROM purchases WHERE user_id = ? AND guide_id LIKE ?",
@@ -667,6 +721,14 @@ CREATE TABLE IF NOT EXISTS habits (
     day     TEXT    NOT NULL,
     mask    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS labels (
+    id         BIGSERIAL PRIMARY KEY,
+    photo_id   TEXT   NOT NULL UNIQUE,
+    score      DOUBLE PRECISION NOT NULL,
+    metrics    TEXT   NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS xp_events (
@@ -989,6 +1051,37 @@ class PostgresDatabase(BaseDatabase):
                 "SELECT guide_id FROM purchases WHERE user_id = $1", user_id
             )
         return {row["guide_id"] for row in rows}
+
+    async def add_label(self, photo_id: str, score: float, metrics: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                INSERT INTO labels (photo_id, score, metrics) VALUES ($1, $2, $3)
+                ON CONFLICT DO NOTHING RETURNING id
+                """,
+                photo_id, score, metrics,
+            )
+        return row is not None
+
+    async def label_stats(self) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT COUNT(*) AS n, AVG(score) AS avg FROM labels")
+            rows = await conn.fetch(
+                """
+                  SELECT FLOOR(score)::int AS bucket, COUNT(*) AS n
+                    FROM labels GROUP BY bucket ORDER BY bucket
+                """
+            )
+        return {
+            "total": int(row["n"] or 0),
+            "average": round(float(row["avg"] or 0), 2),
+            "buckets": {int(r["bucket"]): int(r["n"]) for r in rows},
+        }
+
+    async def export_labels(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT photo_id, score, metrics FROM labels ORDER BY id")
+        return [dict(r) for r in rows]
 
     async def count_purchases(self, user_id: int, prefix: str) -> int:
         async with self.pool.acquire() as conn:

@@ -879,6 +879,125 @@ function initShare() {
   trackRail();
 }
 
+/* ── Разметка (владелец) ─────────────────────────────────── */
+
+const TIER_HINTS = [
+  ["Sub-3", 0.8], ["Sub-5", 1.9], ["LTN", 3.2],
+  ["MTN", 4.6], ["HTN", 5.9], ["Chadlite", 6.9], ["Chad", 8.0],
+];
+
+const labeling = { queue: [], current: null, done: 0, saved: 0 };
+
+function showProgress(text) {
+  $("lb-progress").innerHTML =
+    `<div style="min-width:0"><h3>Прогресс</h3>` +
+    `<p class="tiny" style="margin-top:3px">${text}</p></div>`;
+}
+
+async function nextLabel() {
+  $("lb-work").classList.add("hidden");
+
+  while (labeling.queue.length) {
+    const file = labeling.queue.shift();
+    labeling.done += 1;
+    showProgress(
+      `Осталось ${labeling.queue.length} · сохранено ${labeling.saved}`
+    );
+
+    const prepared = await prepareImage(file, 1280, 0.9);
+    const url = URL.createObjectURL(prepared);
+    const image = $("lb-img");
+    image.src = url;
+
+    try {
+      await new Promise((ok, no) => {
+        image.onload = ok;
+        image.onerror = no;
+      });
+      const found = await analyseImage(image);
+      if (!found) {
+        toast("Лицо не найдено, пропускаю");
+        URL.revokeObjectURL(url);
+        continue;
+      }
+      labeling.current = {
+        hash: await sha256(prepared),
+        metrics: found.metrics,
+        url,
+      };
+      $("lb-work").classList.remove("hidden");
+      return;
+    } catch (_) {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  showProgress(
+    labeling.saved
+      ? `Готово. Сохранено в этот заход: ${labeling.saved}`
+      : "Выбери фото, чтобы начать"
+  );
+  labeling.current = null;
+}
+
+async function saveLabel() {
+  if (!labeling.current) return;
+  haptic("medium");
+
+  const body = new FormData();
+  body.append("photo_hash", labeling.current.hash);
+  body.append("score", $("lb-range").value);
+  body.append("metrics", JSON.stringify(labeling.current.metrics));
+
+  try {
+    const result = await api("/api/label", { method: "POST", body });
+    labeling.saved += 1;
+    toast(result.added ? `Всего примеров: ${result.total}` : "Это фото уже размечено");
+  } catch (error) {
+    toast(error.message);
+  }
+
+  URL.revokeObjectURL(labeling.current.url);
+  nextLabel();
+}
+
+function initLabeling() {
+  $("lb-quick").innerHTML = TIER_HINTS.map(
+    ([name, value]) => `<button data-score="${value}">${name}</button>`
+  ).join("");
+
+  $("lb-quick").addEventListener("click", (event) => {
+    const value = event.target.dataset?.score;
+    if (!value) return;
+    haptic();
+    $("lb-range").value = value;
+    $("lb-value").textContent = Number(value).toFixed(1);
+  });
+
+  $("lb-range").addEventListener("input", (event) => {
+    $("lb-value").textContent = Number(event.target.value).toFixed(1);
+  });
+
+  $("lb-pick").addEventListener("click", () => $("lb-files").click());
+
+  $("lb-files").addEventListener("change", (event) => {
+    labeling.queue = [...event.target.files];
+    labeling.done = 0;
+    labeling.saved = 0;
+    event.target.value = "";
+    if (labeling.queue.length) nextLabel();
+  });
+
+  $("lb-save").addEventListener("click", saveLabel);
+  $("lb-skip").addEventListener("click", () => {
+    haptic();
+    if (labeling.current) URL.revokeObjectURL(labeling.current.url);
+    nextLabel();
+  });
+
+  showProgress("Выбери фото, чтобы начать");
+}
+
 /* ── Профиль ─────────────────────────────────────────────── */
 
 function paintStats(stats, user) {
@@ -1192,6 +1311,7 @@ async function boot() {
   initGate();
   initShare();
   initReferral();
+  initLabeling();
   initScan();
   initSegments();
 
@@ -1208,6 +1328,8 @@ async function boot() {
 
     state.channel = session.channel || state.channel;
     state.brand = session.brand || state.brand;
+    // Вкладка разметки существует только для владельца
+    if (session.is_admin) $("tab-label").classList.remove("hidden");
     state.botUsername = session.bot_username || "";
 
     if (session.onboarded) {

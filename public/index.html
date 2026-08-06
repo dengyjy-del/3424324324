@@ -392,6 +392,48 @@
     <div id="guides-list"></div>
   </section>
 
+  <!-- ══════════════ РАЗМЕТКА (только владельцу) ══════════════ -->
+  <section class="screen" id="s-label">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Обучение модели</p>
+      <h1 style="margin-top:6px">Разметка</h1>
+    </header>
+
+    <div class="glass pad">
+      <h3>Как это работает</h3>
+      <p class="tiny" style="margin-top:6px">
+        Выбери сразу пачку фото. Приложение найдёт лицо и посчитает замеры
+        прямо здесь, на устройстве. Ты ставишь балл — на сервер уходят
+        только числа. Снимки никуда не отправляются и нигде не хранятся.
+      </p>
+      <button class="btn btn-primary" id="lb-pick" style="margin-top:12px">
+        Выбрать фото
+      </button>
+      <input type="file" id="lb-files" accept="image/*" multiple class="hidden">
+    </div>
+
+    <div class="glass pad" id="lb-progress" style="margin-top:10px"></div>
+
+    <div class="hidden" id="lb-work">
+      <div class="preview" style="margin-top:10px;aspect-ratio:1/1">
+        <img id="lb-img" alt="">
+      </div>
+      <div class="glass pad" style="margin-top:10px">
+        <p class="eyebrow">Оценка</p>
+        <div class="ref-code" id="lb-value" style="font-size:34px">5.0</div>
+        <input type="range" id="lb-range" min="0" max="10" step="0.1" value="5"
+               style="width:100%;margin-top:12px">
+        <div class="lb-quick" id="lb-quick"></div>
+        <button class="btn btn-primary" id="lb-save" style="margin-top:12px">
+          Сохранить и дальше
+        </button>
+        <button class="btn btn-glass" id="lb-skip" style="margin-top:8px">
+          Пропустить
+        </button>
+      </div>
+    </div>
+  </section>
+
   <!-- ══════════════ ТАБ-БАР ══════════════ -->
   <nav class="tabs" id="tabs">
     <div class="tab-pill" id="tab-pill"></div>
@@ -422,6 +464,12 @@
         <path d="M16.5 5.5a3 3 0 0 1 0 5.6M18 20a6 6 0 0 0-2.2-4.6"/>
       </svg>
       Друзья
+    </button>
+    <button class="tab hidden" data-screen="s-label" id="tab-label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>
+      </svg>
+      Разметка
     </button>
     <button class="tab" data-screen="s-guides">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">

@@ -330,7 +330,7 @@ else:
             url=f"{base}/api/telegram",
             secret_token=config.webhook_secret or None,
             drop_pending_updates=True,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=["message", "callback_query", "my_chat_member"],
         )
         await bot.set_my_commands(
             [

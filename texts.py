@@ -517,3 +517,42 @@ PHOTO_NO_APP = (
     "📸 Разбор фото работает в приложении.\n"
     "<i>Оно пока не настроено — загляни позже.</i>"
 )
+
+
+LABELS_EMPTY = (
+    "🏷 <b>РАЗМЕТКА</b>\n"
+    "Пока пусто. Открой приложение и пролистай вкладки до раздела «Разметка» — "
+    "он виден только тебе.\n"
+    "<i>Фотографии никуда не отправляются: замеры считает браузер, "
+    "на сервер уходят только числа.</i>"
+)
+
+
+def label_stats(data: dict) -> str:
+    total = data["total"]
+    lines = [
+        "🏷 <b>РАЗМЕТКА</b>",
+        LINE,
+        f"Собрано примеров: <b>{total}</b>",
+        f"Средний балл: <b>{data['average']}</b>",
+        LINE,
+        "<b>ПО БАЛЛАМ</b>",
+    ]
+
+    buckets = data["buckets"]
+    peak = max(buckets.values()) if buckets else 1
+    for score in range(0, 10):
+        count = buckets.get(score, 0)
+        bar = "█" * round(count / peak * 14) if count else ""
+        lines.append(f"<code>{score}-{score + 1}</code> {bar} {count}")
+
+    # Ниже трёхсот примеров модель на 22 признаках остаётся неустойчивой
+    left = max(0, 300 - total)
+    lines += [
+        LINE,
+        f"До надёжной модели: ещё <b>{left}</b>" if left
+        else "✅ Примеров достаточно для переобучения",
+        "<i>Ровнее всего работает, когда баллы распределены равномерно, "
+        "а не собраны в середине.</i>",
+    ]
+    return "\n".join(lines)

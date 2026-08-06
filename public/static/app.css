@@ -1390,3 +1390,31 @@ h3 {
   color: var(--aura-mint);
   cursor: default;
 }
+
+
+/* ── Разметка ────────────────────────────────────────────── */
+
+.lb-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.lb-quick button {
+  flex: 1 0 auto;
+  min-width: 62px;
+  padding: 9px 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--stroke);
+  background: var(--glass);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.lb-quick button:active { background: var(--glass-strong); }
+
+#lb-range { accent-color: #5b4bff; }
