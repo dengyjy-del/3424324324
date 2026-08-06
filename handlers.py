@@ -183,10 +183,25 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
         except TelegramAPIError as error:
             lines.append(f"  ❌ участника не проверить: {texts.safe(str(error)[:70])}")
 
+    # Частая ошибка: в CHAT_ID кладут ID канала. Тогда проверка идёт по
+    # одному и тому же месту дважды, и подписка на чат фактически не нужна.
+    if config.channel_id and config.chat_id:
+        try:
+            first = await message.bot.get_chat(config.channel_id)
+            second = await message.bot.get_chat(config.chat_id)
+            if first.id == second.id:
+                lines += [
+                    texts.LINE,
+                    "⚠️ <b>Канал и чат — это одно и то же место.</b>",
+                    "В CHAT_ID попал ID канала, поэтому подписка на чат "
+                    "не проверяется. Нужен ID группы.",
+                ]
+        except TelegramAPIError:
+            pass
+
     lines += [
         texts.LINE,
-        "<i>Проверка требует, чтобы бот был администратором. Для приватного "
-        "чата в CHAT_ID нужен числовой ID вида -100…, а не ссылка.</i>",
+        "<i>Чтобы узнать ID группы: перешли сюда любое сообщение из неё.</i>",
     ]
     await message.answer("\n".join(lines))
 
@@ -283,6 +298,32 @@ async def _demo_report(message: Message, user: User, config: Config) -> None:
         await status.edit_text(card, reply_markup=markup)
     except TelegramBadRequest:
         await message.answer(card, reply_markup=markup)
+
+
+@router.message(F.forward_origin)
+async def cmd_whereis(message: Message, config: Config) -> None:
+    """Показывает ID источника пересланного сообщения. Только для владельца."""
+    user = message.from_user
+    if user is None or not config.is_admin(user.id):
+        return
+
+    origin = message.forward_origin
+    chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
+
+    if chat is None:
+        await message.answer(
+            "Это сообщение переслано от пользователя, а не из чата.\n"
+            "<i>Перешли сообщение, отправленное в самой группе.</i>"
+        )
+        return
+
+    kind = "канал" if chat.type == "channel" else "группа"
+    await message.answer(
+        f"🆔 <b>{texts.safe(chat.title or '—')}</b>\n"
+        f"Тип: {kind}\n"
+        f"ID: <code>{chat.id}</code>\n\n"
+        "<i>Для проверки подписки на группу впиши это число в CHAT_ID.</i>"
+    )
 
 
 @router.message(F.document)

@@ -158,7 +158,41 @@ export function computeMetrics(landmarks, width, height) {
     pt(P.lipTop)
   ) || 1;
 
+  // Глубина. Face Mesh отдаёт z для каждой точки, и рельеф оказался
+  // сильнее геометрии: у плоского лица подбородок и нос почти не
+  // выступают, тогда как ширина лица одинакова и у полного, и у
+  // человека с выраженными скулами.
+  const zScale = faceWidth || 1;
+  const z = (index) => (landmarks[index].z * width) / zScale;
+  const oval = FACE_OVAL.map(z);
+  const every4 = [];
+  for (let i = 0; i < landmarks.length; i += 4) every4.push(z(i));
+  const mean4 = every4.reduce((a, b) => a + b, 0) / every4.length;
+  const relief = Math.sqrt(
+    every4.reduce((a, b) => a + (b - mean4) ** 2, 0) / every4.length
+  );
+
+  // Форма лица: округлость и то, как оно сужается книзу. Эти признаки
+  // помогают отличать узкое лицо от широкого и полного.
+  const midJaw = dist(pt(58), pt(288));
+  const lowJaw = dist(pt(P.jawL), pt(P.jawR));
+
   return {
+    relief,
+    nose_proj: z(1) - z(P.glabella),
+    cheek_proj: (z(P.cheekL) + z(P.cheekR)) / 2 - z(1),
+    chin_proj: z(P.chin) - z(P.glabella),
+    oval_flat: Math.max(...oval) - Math.min(...oval),
+    brow_proj: (z(P.browL) + z(P.browR)) / 2 - z(P.glabella),
+
+    face_aspect: faceWidth / faceHeight,
+    mid_jaw: midJaw / (faceWidth || 1),
+    low_jaw: lowJaw / (faceWidth || 1),
+    chin_taper: dist(pt(148), pt(377)) / (faceWidth || 1),
+    jaw_drop: dist(chin, pt(P.lipTop)) / (faceWidth || 1),
+    cheek_to_jaw: dist(cheekL, pt(P.jawL)) / (faceWidth || 1),
+    lower_third: dist(subnasale, chin) / faceHeight,
+
     canthal_tilt: canthalTilt,
     eye_aspect: eyeAspect,
     symmetry,

@@ -272,13 +272,15 @@ PARAMETERS: tuple[Parameter, ...] = (
     ),
 )
 
+# Пороги опущены вслед за сжатием верха шкалы: иначе верхние тиры стали бы
+# недостижимы, а почти все попадали бы в LTN.
 TIERS: tuple[Tier, ...] = (
-    Tier(9.0, "🌟", "Gigachad", "запредельный тир", "Статистическая аномалия."),
-    Tier(7.5, "👑", "Chad", "верхний тир", "Заметен в любой комнате."),
-    Tier(6.8, "🔶", "Chadlite", "выше среднего+", "До верхнего тира — рукой подать."),
-    Tier(6.0, "🔷", "HTN", "High Tier Normie", "Сильная база, есть что докрутить."),
-    Tier(5.0, "🔹", "MTN", "Mid Tier Normie", "Рабочая база и приличный запас роста."),
-    Tier(3.6, "🌱", "LTN", "Low Tier Normie", "Всё решает уход и режим."),
+    Tier(7.0, "🌟", "Gigachad", "запредельный тир", "Статистическая аномалия."),
+    Tier(6.4, "👑", "Chad", "верхний тир", "Заметен в любой комнате."),
+    Tier(5.7, "🔶", "Chadlite", "выше среднего+", "До верхнего тира — рукой подать."),
+    Tier(4.9, "🔷", "HTN", "High Tier Normie", "Сильная база, есть что докрутить."),
+    Tier(3.9, "🔹", "MTN", "Mid Tier Normie", "Рабочая база и приличный запас роста."),
+    Tier(3.0, "🌱", "LTN", "Low Tier Normie", "Всё решает уход и режим."),
     Tier(0.0, "🍂", "Sub-LTN", "нижний тир", "Стартовая точка. Дальше только вверх."),
 )
 
@@ -417,7 +419,7 @@ def pick_tip(report: Report, score: ParameterScore, salt: str = "looksmax") -> s
 #
 # Нижняя граница держится на 3.0 осознанно.
 
-MEASURED_MIN = 3.0
+MEASURED_MIN = 2.0
 MEASURED_MAX = 9.2
 
 
@@ -435,6 +437,23 @@ class FaceMetrics:
     chin_ratio: float         # высота нижней трети / высота лица
     nose_ratio: float         # ширина носа / ширина лица
 
+    # Признаки формы лица: помогают отличать округлое лицо от узкого
+    face_aspect: float = 0.80     # ширина скул / высота лица
+    mid_jaw: float = 0.88         # ширина на уровне рта / ширина скул
+    low_jaw: float = 0.80         # ширина углов челюсти / ширина скул
+    chin_taper: float = 0.19      # сужение у подбородка
+    jaw_drop: float = 0.31        # от губы до подбородка / ширина скул
+    cheek_to_jaw: float = 0.55    # длина боковой линии
+    lower_third: float = 0.38     # высота нижней трети / высота лица
+
+    # Рельеф лица по глубине: различает выступающие черты и плоское лицо
+    relief: float = 0.13
+    nose_proj: float = -0.12
+    cheek_proj: float = 0.70
+    chin_proj: float = 0.20
+    oval_flat: float = 0.62
+    brow_proj: float = 0.04
+
     @classmethod
     def from_payload(cls, data: dict) -> "FaceMetrics":
         def number(key: str, low: float, high: float) -> float:
@@ -446,6 +465,14 @@ class FaceMetrics:
                 raise ValueError(f"замер {key} вне допустимого диапазона")
             return value
 
+        def optional(key: str, low: float, high: float, default: float) -> float:
+            """Старые версии приложения этих замеров не присылают."""
+            try:
+                value = float(data[key])
+            except (KeyError, TypeError, ValueError):
+                return default
+            return value if low <= value <= high else default
+
         return cls(
             canthal_tilt=number("canthal_tilt", -25, 25),
             eye_aspect=number("eye_aspect", 0.05, 1.2),
@@ -456,6 +483,24 @@ class FaceMetrics:
             gonial_angle=number("gonial_angle", 80, 175),
             chin_ratio=number("chin_ratio", 0.15, 0.6),
             nose_ratio=number("nose_ratio", 0.15, 0.7),
+            **{
+                key: optional(key, low, high, default)
+                for key, low, high, default in (
+                    ("face_aspect", 0.4, 1.6, 0.80),
+                    ("mid_jaw", 0.4, 1.3, 0.88),
+                    ("low_jaw", 0.3, 1.3, 0.80),
+                    ("chin_taper", 0.05, 0.6, 0.19),
+                    ("jaw_drop", 0.1, 0.8, 0.31),
+                    ("cheek_to_jaw", 0.2, 1.2, 0.55),
+                    ("lower_third", 0.15, 0.7, 0.38),
+                    ("relief", 0.02, 0.6, 0.13),
+                    ("nose_proj", -0.8, 0.4, -0.12),
+                    ("cheek_proj", 0.1, 1.6, 0.70),
+                    ("chin_proj", -0.5, 1.2, 0.20),
+                    ("oval_flat", 0.1, 1.8, 0.62),
+                    ("brow_proj", -0.4, 0.6, 0.04),
+                )
+            },
         )
 
 
@@ -525,32 +570,45 @@ QUALITY_RULES = {
 # вовсе, поэтому на отдельном лице ошибка остаётся заметной. Чтобы поднять
 # точность дальше, нужна выборка в сотни фото, а не полсотни.
 
-MODEL_KEYS = ['canthal_tilt', 'eye_aspect', 'symmetry', 'thirds_balance', 'fwhr', 'jaw_ratio', 'gonial_angle', 'chin_ratio', 'nose_ratio']
-MODEL_MEAN = [3.759164, 0.311444, 0.96643, 0.744137, 1.493919, 0.799855, 137.787428, 0.391893, 0.308622]
-MODEL_SCALE = [2.333207, 0.037024, 0.025609, 0.119213, 0.120024, 0.01771, 3.720035, 0.029678, 0.016074]
-MODEL_COEF = [0.244004, -0.379986, 0.134092, 0.272937, 0.611081, 0.472157, 0.807974, 0.070112, -0.426792]
+MODEL_KEYS = ['canthal_tilt', 'eye_aspect', 'symmetry', 'thirds_balance', 'fwhr', 'jaw_ratio', 'gonial_angle', 'chin_ratio', 'nose_ratio', 'face_aspect', 'mid_jaw', 'low_jaw', 'chin_taper', 'jaw_drop', 'cheek_to_jaw', 'lower_third', 'relief', 'nose_proj', 'cheek_proj', 'chin_proj', 'oval_flat', 'brow_proj']
+MODEL_MEAN = [3.759164, 0.311444, 0.96643, 0.744137, 1.493919, 0.799855, 137.787428, 0.391893, 0.308622, 0.835063, 0.888746, 0.799855, 0.192305, 0.314452, 0.447254, 0.391893, 0.138021, -0.119188, 0.705455, 0.228784, 0.654326, 0.040419]
+MODEL_SCALE = [2.333207, 0.037024, 0.025609, 0.119213, 0.120024, 0.01771, 3.720035, 0.029678, 0.016074, 0.036945, 0.016403, 0.01771, 0.009894, 0.030871, 0.020274, 0.029678, 0.010438, 0.044815, 0.034968, 0.122762, 0.076432, 0.021241]
+MODEL_COEF = [-0.094147, -0.154467, 0.083119, 0.014112, 0.251268, 0.083123, 0.094421, 0.105825, -0.310482, -0.006352, 0.048338, 0.083123, 0.015661, 0.100577, -0.133766, 0.105825, -0.024597, 0.402702, 0.0776, 0.421213, 0.175521, -0.403405]
 MODEL_INTERCEPT = 6.383636
+MODEL_PIVOT = 6.3836
 
-# Калибровка выхода: растяжка разводит тиры, сдвиг поднимает шкалу так,
-# чтобы обычное лицо получало около 5, а не около 4.
-MODEL_CENTER = 6.3836
-MODEL_RAW_MEAN = 6.3836
-MODEL_STRETCH = 1.6
-MODEL_SHIFT = 0.6
+# Калибровка асимметричная: ниже опорной точки отклонение растягивается
+# сильнее, чем выше. Так менее привлекательные лица не собираются в кучу
+# около середины шкалы, а верх при этом не улетает за десятку.
+MODEL_PIVOT = 6.3836
+MODEL_LOW = 2.4
+MODEL_HIGH = 2.4
+MODEL_SHIFT = -0.6
+
+# Сжатие верхней части: якорь и коэффициент
+TOP_ANCHOR = 4.0
+TOP_SQUEEZE = 0.62
 
 
 def model_score(metrics: "FaceMetrics") -> float:
-    """Общий балл по замерам. Возвращает значение в коридоре 3.0-9.4."""
+    """Общий балл по замерам. Возвращает значение в коридоре 3.0-9.6."""
     raw = MODEL_INTERCEPT
     for key, mean, scale, coef in zip(
         MODEL_KEYS, MODEL_MEAN, MODEL_SCALE, MODEL_COEF
     ):
         raw += coef * (getattr(metrics, key) - mean) / (scale or 1.0)
 
-    calibrated = (
-        MODEL_CENTER + (raw - MODEL_RAW_MEAN) * MODEL_STRETCH + MODEL_SHIFT
-    )
-    return _clamp(calibrated, MEASURED_MIN, 9.4)
+    delta = raw - MODEL_PIVOT
+    stretched = delta * (MODEL_LOW if delta < 0 else MODEL_HIGH)
+    value = _clamp(MODEL_PIVOT + stretched + MODEL_SHIFT, MEASURED_MIN, 9.6)
+
+    # Верх шкалы поджат: в луксмаксинге девятка — величина почти
+    # теоретическая, и оценки вроде 9.4 обесценивают всю шкалу. Ниже
+    # опорной точки ничего не меняется, чтобы низ не уехал ещё дальше.
+    if value > TOP_ANCHOR:
+        value = TOP_ANCHOR + (value - TOP_ANCHOR) * TOP_SQUEEZE
+
+    return round(value, 2)
 
 
 def measured_report(
