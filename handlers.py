@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from aiogram import F, Router
 from aiogram.enums import ChatAction
@@ -25,6 +26,8 @@ from access import DemoState, SubscriptionGate
 from config import Config
 from database import BaseDatabase as Database
 from rating import generate_report
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="looksmax")
 
@@ -220,8 +223,19 @@ async def cmd_labels(message: Message, db: Database, config: Config) -> None:
     if user is None or not config.admin_ids or not config.is_admin(user.id):
         return
 
-    stats = await db.label_stats()
-    rows = await db.export_labels()
+    # Ошибку показываем, а не прячем: раньше сбой чтения выглядел как
+    # «разметки нет», и было непонятно, потерялись данные или нет.
+    try:
+        stats = await db.label_stats()
+        rows = await db.export_labels()
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Не удалось прочитать разметку")
+        await message.answer(
+            "⚠️ <b>Не удалось прочитать разметку</b>\n"
+            f"<code>{texts.safe(type(error).__name__)}: "
+            f"{texts.safe(str(error)[:120])}</code>"
+        )
+        return
 
     if not stats["total"]:
         await message.answer(texts.LABELS_EMPTY)

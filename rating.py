@@ -461,6 +461,12 @@ class FaceMetrics:
     skin_variance: float = 0.11
     skin_redness: float = 0.35
 
+    # Качество снимка. В балл не входит — показывается отдельно, но
+    # сохраняется в разметке: по нему видно, какие примеры надёжнее.
+    yaw: float = 0.0
+    roll: float = 0.0
+    face_share: float = 0.4
+
     @classmethod
     def from_payload(cls, data: dict) -> "FaceMetrics":
         def number(key: str, low: float, high: float) -> float:
@@ -509,6 +515,9 @@ class FaceMetrics:
                     ("brow_contrast", 0.0, 1.0, 0.10),
                     ("skin_variance", 0.0, 1.0, 0.11),
                     ("skin_redness", -1.0, 2.0, 0.35),
+                    ("yaw", 0.0, 1.0, 0.0),
+                    ("roll", 0.0, 90.0, 0.0),
+                    ("face_share", 0.05, 1.0, 0.4),
                 )
             },
         )

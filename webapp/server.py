@@ -424,8 +424,16 @@ def create_app(
         except (ValueError, json.JSONDecodeError):
             raise HTTPException(status_code=422, detail="Замеры не разобрать") from None
 
-        added = await db.add_label(photo_hash[:32], round(score, 2), metrics)
-        stats = await db.label_stats()
+        try:
+            added = await db.add_label(photo_hash[:32], round(score, 2), metrics)
+            stats = await db.label_stats()
+        except Exception as error:  # noqa: BLE001
+            logger.exception("Разметка не сохранилась")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Не сохранилось: {type(error).__name__}",
+            ) from error
+
         return {"ok": True, "added": added, "total": stats["total"]}
 
     @app.post("/api/feedback")
@@ -619,9 +627,10 @@ def create_app(
     async def cache_static(request, call_next):
         response = await call_next(request)
         if request.url.path.startswith("/static/"):
-            # Ассеты неизменяемы в пределах деплоя: CDN Vercel закеширует их
-            # и перестанет будить функцию на каждый запрос.
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            # Никакого immutable: имена файлов не содержат хеша сборки, а
+            # значит браузер с годовым кешем просто не узнает об обновлении.
+            # Именно из-за этого правки могли не доезжать до пользователей.
+            response.headers["Cache-Control"] = "public, max-age=600, must-revalidate"
         return response
 
     # check_dir=False: отсутствие папки не должно ронять приложение на импорте —
