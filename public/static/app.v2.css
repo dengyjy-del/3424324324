@@ -1418,3 +1418,87 @@ h3 {
 .lb-quick button:active { background: var(--glass-strong); }
 
 #lb-range { accent-color: #5b4bff; }
+
+/* ── Схема кадра на экране загрузки ──────────────────────── */
+
+.frame-guide {
+  width: 116px;
+  height: auto;
+  margin-bottom: 4px;
+}
+
+.fg-frame {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 1;
+  stroke-dasharray: 5 6;
+}
+
+.fg-corner path {
+  fill: none;
+  stroke: var(--aura-mint);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.fg-head {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.fg-axis {
+  stroke: rgba(0, 224, 198, 0.5);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.fg-eye {
+  fill: var(--aura-mint);
+}
+
+.fg-line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* Примеры неудачных кадров */
+.bad-shots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bad-shot {
+  text-align: center;
+}
+
+.bad-shot svg {
+  width: 100%;
+  height: auto;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 61, 113, 0.07);
+  border: 1px solid rgba(255, 61, 113, 0.22);
+}
+
+.bad-shot span {
+  display: block;
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.25;
+}
+
+.bs-head {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 2;
+}
+
+.bs-eye { fill: rgba(255, 255, 255, 0.4); }
+.bs-shade { fill: rgba(0, 0, 0, 0.45); stroke: none; }
