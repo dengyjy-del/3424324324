@@ -142,6 +142,7 @@ def create_app(
             "bot_username": await configured_bot_name(),
             "is_admin": config.is_admin(user.id),
             "theme": await db.get_theme(user.id) or "classic",
+            "model_version": rating.MODEL_VERSION,
             "stats": _stats_payload(stats),
             "subscribed": await _is_subscribed(user.id),
             "channel": {
@@ -269,6 +270,16 @@ def create_app(
             )
 
         payload = _report_payload(report, hide_id=in_demo)
+        payload["model_version"] = rating.MODEL_VERSION
+        # Владельцу отдаём сырые замеры: по ним видно, что именно посчитал
+        # браузер, и совпадает ли это с тем, что считаю я при разборе жалоб.
+        if config.is_admin(user.id) and face is not None:
+            payload["debug"] = {
+                "raw": round(rating.model_score(face), 2),
+                "strictness": rating.STRICTNESS,
+                "metrics": {k: round(getattr(face, k), 4) for k in rating.MODEL_KEYS},
+            }
+
         payload["measurements"] = (
             rating.metrics_readout(face) if face is not None and not in_demo else []
         )

@@ -772,6 +772,22 @@ function renderReport(report) {
     confBox.classList.add("hidden");
   }
 
+  // Владельцу — сырые числа под отчётом: по ним разбираются жалобы
+  const dbg = $("res-debug");
+  if (report.debug) {
+    const rows = Object.entries(report.debug.metrics)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(" · ");
+    dbg.classList.remove("hidden");
+    dbg.innerHTML =
+      `<p class="eyebrow">Отладка</p>` +
+      `<p class="tiny" style="margin-top:6px">модель ${report.model_version} · ` +
+      `сырой балл ${report.debug.raw} · строгость ${report.debug.strictness}</p>` +
+      `<p class="tiny" style="margin-top:6px;color:var(--ink-3);word-break:break-all">${rows}</p>`;
+  } else {
+    dbg.classList.add("hidden");
+  }
+
   const measurements = report.measurements || [];
   $("res-measure-card").classList.toggle("hidden", measurements.length === 0);
   $("res-measurements").innerHTML = measurements
@@ -1480,6 +1496,10 @@ async function boot() {
     // Вкладка разметки существует только для владельца
     if (session.is_admin) $("tab-label").classList.remove("hidden");
     applyTheme(session.theme || "classic");
+    state.modelVersion = session.model_version || "";
+    if (session.is_admin && state.modelVersion) {
+      $("res-version").textContent = `модель: ${state.modelVersion}`;
+    }
     state.botUsername = session.bot_username || "";
 
     if (session.onboarded) {

@@ -604,6 +604,10 @@ QUALITY_RULES = {
 # Оценки пользователей в обучение не идут: сами по себе они предсказуемы по
 # лицу с корреляцией 0.07, то есть почти не связаны с тем, что на фото.
 
+# Версия модели. Показывается в приложении и в /api/health — по ней сразу
+# видно, работает ли последняя сборка или браузер держит старую в кеше.
+MODEL_VERSION = "2026-08-09 · 569 фото"
+
 MODEL_KEYS = ['canthal_tilt', 'eye_aspect', 'symmetry', 'thirds_balance', 'fwhr', 'jaw_ratio', 'gonial_angle', 'chin_ratio', 'nose_ratio', 'face_aspect', 'mid_jaw', 'low_jaw', 'chin_taper', 'jaw_drop', 'cheek_to_jaw', 'lower_third', 'relief', 'nose_proj', 'cheek_proj', 'chin_proj', 'oval_flat', 'brow_proj']
 MODEL_SQUARES = ['fwhr', 'jaw_ratio', 'mid_jaw', 'gonial_angle', 'canthal_tilt', 'face_aspect', 'chin_ratio', 'nose_ratio']
 MODEL_MEAN = [4.291967, 0.309936, 0.968824, 0.721189, 1.48922, 0.795117, 138.607369, 0.399687, 0.300736, 0.833785, 0.880999, 0.795117, 0.192659, 0.320033, 0.455861, 0.399687, 0.134969, -0.119605, 0.701727, 0.227119, 0.64219, 0.041214, 2.233552, 0.632851, 0.776663, 19236.499839, 26.655839, 0.697118, 0.160684, 0.090856]

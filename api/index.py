@@ -240,8 +240,11 @@ else:
         except Exception:  # noqa: BLE001 — имя не критично для проверки
             bot_name = "не удалось определить"
 
+        import rating as _rating
+
         info = {
             "ok": True,
+            "model": _rating.MODEL_VERSION,
             "bot": bot_name,
             "database": "postgres" if config.uses_postgres else "sqlite",
             "webapp_url": config.webapp_url,
