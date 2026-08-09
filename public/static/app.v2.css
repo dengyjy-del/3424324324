@@ -1502,3 +1502,99 @@ h3 {
 
 .bs-eye { fill: rgba(255, 255, 255, 0.4); }
 .bs-shade { fill: rgba(0, 0, 0, 0.45); stroke: none; }
+
+/* ══════════════════ ОФОРМЛЕНИЯ ══════════════════
+   Меняются только цвета: база, три ауры и оттенок текста. Всё остальное —
+   стекло, скругления, тени — считается от них, поэтому характер интерфейса
+   сохраняется, а настроение меняется целиком. */
+
+/* Графит — почти монохром, акцент серебром. Самая тихая из тем. */
+[data-theme="graphite"] {
+  --void: #0a0a0c;
+  --void-2: #131317;
+  --aura-indigo: #6e7480;
+  --aura-rose: #9aa1ad;
+  --aura-mint: #d8dce3;
+  --ink: #f4f5f7;
+  --ink-2: rgba(244, 245, 247, 0.56);
+  --ink-3: rgba(244, 245, 247, 0.32);
+}
+
+/* Мокко — тёплый тёмный шоколад с мятой. Единственная тёплая база. */
+[data-theme="mocha"] {
+  --void: #100c0a;
+  --void-2: #1a1512;
+  --aura-indigo: #6b5442;
+  --aura-rose: #a87f5e;
+  --aura-mint: #57d6b0;
+  --ink: #f6f1ec;
+  --ink-2: rgba(246, 241, 236, 0.58);
+  --ink-3: rgba(246, 241, 236, 0.34);
+}
+
+/* Сапфир — холодная глубина, ближе всего к ночному небу. */
+[data-theme="sapphire"] {
+  --void: #05080f;
+  --void-2: #0a1120;
+  --aura-indigo: #2563eb;
+  --aura-rose: #0ea5e9;
+  --aura-mint: #7dd3fc;
+  --ink: #eef4fb;
+  --ink-2: rgba(238, 244, 251, 0.58);
+  --ink-3: rgba(238, 244, 251, 0.34);
+}
+
+/* Выбор оформления */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.theme-card {
+  padding: 0;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-md);
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.26s var(--spring), border-color 0.25s;
+}
+
+.theme-card:active { transform: scale(0.94); }
+
+.theme-card.on {
+  border-color: var(--stroke-bright);
+  box-shadow: 0 0 0 1.5px var(--aura-mint) inset;
+}
+
+/* Мини-превью палитры: подложка и три ауры темы */
+.theme-swatch {
+  position: relative;
+  height: 52px;
+  overflow: hidden;
+}
+
+.theme-swatch i {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  filter: blur(9px);
+}
+
+.theme-swatch i:nth-child(1) { top: -6px; left: -6px; }
+.theme-swatch i:nth-child(2) { top: 12px; right: -8px; }
+.theme-swatch i:nth-child(3) { bottom: -10px; left: 40%; }
+
+.theme-name {
+  display: block;
+  padding: 7px 2px 8px;
+  font-size: 10.5px;
+  font-weight: 620;
+  color: var(--ink-2);
+  background: var(--glass);
+}
+
+.theme-card.on .theme-name { color: var(--ink); }

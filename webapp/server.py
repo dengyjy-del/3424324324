@@ -141,6 +141,7 @@ def create_app(
             # поэтому при смене бота ничего править не придётся.
             "bot_username": await configured_bot_name(),
             "is_admin": config.is_admin(user.id),
+            "theme": await db.get_theme(user.id) or "classic",
             "stats": _stats_payload(stats),
             "subscribed": await _is_subscribed(user.id),
             "channel": {
@@ -149,6 +150,17 @@ def create_app(
                 "title": config.channel_title,
             },
         }
+
+    THEMES = ("classic", "graphite", "mocha", "sapphire")
+
+    @app.post("/api/theme")
+    async def set_theme(
+        theme: str = Form(...), user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        if theme not in THEMES:
+            raise HTTPException(status_code=400, detail="Неизвестное оформление")
+        await db.set_theme(user.id, theme)
+        return {"ok": True, "theme": theme}
 
     @app.post("/api/age")
     async def declare_age(

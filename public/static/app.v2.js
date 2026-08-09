@@ -18,6 +18,7 @@ const state = {
   botUsername: "",
   report: null,
   lastScan: null,
+  theme: "classic",
   cardTheme: 0,
   refCode: "",
   guides: [],
@@ -1089,6 +1090,61 @@ function initLabeling() {
   showProgress("Выбери фото, чтобы начать");
 }
 
+/* ── Оформление ──────────────────────────────────────────── */
+
+const THEMES = [
+  { id: "classic", name: "Классика", colors: ["#5b4bff", "#ff3d71", "#00e0c6"], bg: "#07080d" },
+  { id: "graphite", name: "Графит", colors: ["#6e7480", "#9aa1ad", "#d8dce3"], bg: "#0a0a0c" },
+  { id: "mocha", name: "Мокко", colors: ["#6b5442", "#a87f5e", "#57d6b0"], bg: "#100c0a" },
+  { id: "sapphire", name: "Сапфир", colors: ["#2563eb", "#0ea5e9", "#7dd3fc"], bg: "#05080f" },
+];
+
+function applyTheme(id) {
+  state.theme = id;
+  // Классика живёт в :root, поэтому для неё атрибут просто снимается
+  if (id && id !== "classic") document.documentElement.dataset.theme = id;
+  else delete document.documentElement.dataset.theme;
+
+  const theme = THEMES.find((t) => t.id === id) || THEMES[0];
+  try {
+    tg?.setHeaderColor(theme.bg);
+    tg?.setBackgroundColor(theme.bg);
+  } catch (_) {}
+
+  document.querySelectorAll("[data-theme-id]").forEach((card) =>
+    card.classList.toggle("on", card.dataset.themeId === id)
+  );
+}
+
+function initThemes() {
+  $("theme-grid").innerHTML = THEMES.map(
+    (t) => `
+      <button class="theme-card" data-theme-id="${t.id}">
+        <span class="theme-swatch" style="background:${t.bg}">
+          ${t.colors.map((c) => `<i style="background:${c}"></i>`).join("")}
+        </span>
+        <span class="theme-name">${t.name}</span>
+      </button>`
+  ).join("");
+
+  document.querySelectorAll("[data-theme-id]").forEach((card) => {
+    card.addEventListener("click", async () => {
+      haptic();
+      const id = card.dataset.themeId;
+      applyTheme(id);
+
+      const body = new FormData();
+      body.append("theme", id);
+      try {
+        await api("/api/theme", { method: "POST", body });
+      } catch (_) {
+        // Выбор уже применён на экране: если сохранить не вышло,
+        // тревожить сообщением незачем, вернётся при следующем входе.
+      }
+    });
+  });
+}
+
 /* ── Профиль ─────────────────────────────────────────────── */
 
 function paintStats(stats, user) {
@@ -1404,6 +1460,7 @@ async function boot() {
   initReferral();
   initLabeling();
   initFeedback();
+  initThemes();
   initScan();
   initSegments();
 
@@ -1422,6 +1479,7 @@ async function boot() {
     state.brand = session.brand || state.brand;
     // Вкладка разметки существует только для владельца
     if (session.is_admin) $("tab-label").classList.remove("hidden");
+    applyTheme(session.theme || "classic");
     state.botUsername = session.bot_username || "";
 
     if (session.onboarded) {

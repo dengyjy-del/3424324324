@@ -142,6 +142,12 @@ class BaseDatabase(ABC):
     async def label_stats(self) -> dict: ...
 
     @abstractmethod
+    async def set_theme(self, user_id: int, theme: str) -> None: ...
+
+    @abstractmethod
+    async def get_theme(self, user_id: int) -> str | None: ...
+
+    @abstractmethod
     async def set_setting(self, key: str, value: str) -> None: ...
 
     @abstractmethod
@@ -207,7 +213,8 @@ CREATE TABLE IF NOT EXISTS users (
     declared_age  INTEGER,
     onboarded_at  TEXT,
     ref_code      TEXT UNIQUE,
-    referred_by   INTEGER
+    referred_by   INTEGER,
+    theme         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -306,6 +313,7 @@ class SQLiteDatabase(BaseDatabase):
             ("onboarded_at", "ALTER TABLE users ADD COLUMN onboarded_at TEXT"),
             ("ref_code", "ALTER TABLE users ADD COLUMN ref_code TEXT"),
             ("referred_by", "ALTER TABLE users ADD COLUMN referred_by INTEGER"),
+            ("theme", "ALTER TABLE users ADD COLUMN theme TEXT"),
         ):
             if column not in columns:
                 await self.conn.execute(ddl)
@@ -572,6 +580,20 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+    async def set_theme(self, user_id: int, theme: str) -> None:
+        await self.ensure_user(user_id)
+        await self.conn.execute(
+            "UPDATE users SET theme = ? WHERE user_id = ?", (theme, user_id)
+        )
+        await self.conn.commit()
+
+    async def get_theme(self, user_id: int) -> str | None:
+        async with self.conn.execute(
+            "SELECT theme FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row["theme"] if row else None
+
     async def set_setting(self, key: str, value: str) -> None:
         await self.conn.execute(
             """
@@ -749,7 +771,8 @@ CREATE TABLE IF NOT EXISTS users (
     declared_age  INTEGER,
     onboarded_at  TIMESTAMPTZ,
     ref_code      TEXT UNIQUE,
-    referred_by   BIGINT
+    referred_by   BIGINT,
+    theme         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -820,6 +843,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS declared_age INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by  BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS theme        TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
 CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by);
@@ -1142,6 +1166,19 @@ class PostgresDatabase(BaseDatabase):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT photo_id, score, metrics FROM labels ORDER BY id")
         return [dict(r) for r in rows]
+
+    async def set_theme(self, user_id: int, theme: str) -> None:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET theme = $1 WHERE user_id = $2", theme, user_id
+            )
+
+    async def get_theme(self, user_id: int) -> str | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT theme FROM users WHERE user_id = $1", user_id
+            )
 
     async def set_setting(self, key: str, value: str) -> None:
         async with self.pool.acquire() as conn:
