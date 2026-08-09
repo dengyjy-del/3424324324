@@ -654,8 +654,19 @@ TOP_ANCHOR = 4.0
 TOP_SQUEEZE = 1.0
 
 
+# Ручка строгости. Ноль — шкала ровно такая, как размечена владельцем.
+# Отрицательное значение опускает все оценки, положительное поднимает.
+# Меняется на лету командой в боте, без переобучения и передеплоя.
+STRICTNESS = 0.0
+
+
+def set_strictness(value: float) -> None:
+    global STRICTNESS
+    STRICTNESS = max(-3.0, min(3.0, value))
+
+
 def model_score(metrics: "FaceMetrics") -> float:
-    """Общий балл по замерам. Возвращает значение в коридоре 3.0-9.6."""
+    """Общий балл по замерам."""
     # Порядок значений тот же, в каком модель обучалась: сначала признаки,
     # затем квадраты выбранных из них.
     values = [getattr(metrics, key) for key in MODEL_KEYS]
@@ -667,7 +678,7 @@ def model_score(metrics: "FaceMetrics") -> float:
     ):
         raw += coef * (value - mean) / (scale or 1.0)
 
-    value = _clamp(_remap(raw), MEASURED_MIN, 9.6)
+    value = _clamp(_remap(raw) + STRICTNESS, MEASURED_MIN, 9.6)
 
     # Верх шкалы поджат: в луксмаксинге девятка — величина почти
     # теоретическая, и оценки вроде 9.4 обесценивают всю шкалу. Ниже

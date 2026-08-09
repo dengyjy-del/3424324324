@@ -216,6 +216,39 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("strict"))
+async def cmd_strict(message: Message, db: Database, config: Config) -> None:
+    """
+    /strict -0.5 — сделать оценки строже на полбалла, /strict 0 — вернуть.
+
+    Значение живёт в базе, поэтому применяется сразу и к боту, и к
+    приложению, без передеплоя.
+    """
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 1:
+        current = await db.get_setting("strictness") or "0"
+        await message.answer(texts.strict_now(float(current)))
+        return
+
+    try:
+        value = float(parts[1].strip().replace(",", "."))
+    except ValueError:
+        await message.answer(texts.STRICT_USAGE)
+        return
+
+    if not -3.0 <= value <= 3.0:
+        await message.answer(texts.STRICT_USAGE)
+        return
+
+    await db.set_setting("strictness", str(value))
+    rating.set_strictness(value)
+    await message.answer(texts.strict_set(value))
+
+
 @router.message(Command("gift"))
 async def cmd_gift(message: Message, db: Database, config: Config) -> None:
     """

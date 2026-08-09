@@ -580,3 +580,38 @@ def gift_done(amount: int, base: int) -> str:
         "<i>Действует до полуночи по UTC, дальше лимит вернётся к обычному. "
         "Отменить раньше: /gift 0</i>"
     )
+
+
+STRICT_USAGE = (
+    "🎚 <b>СТРОГОСТЬ ОЦЕНОК</b>\n"
+    "<code>/strict -0.5</code> — опустить все оценки на полбалла\n"
+    "<code>/strict 0.3</code> — поднять\n"
+    "<code>/strict 0</code> — вернуть как размечено\n"
+    "<i>Допустимо от -3 до 3.</i>"
+)
+
+
+def strict_now(value: float) -> str:
+    if not value:
+        return (
+            "🎚 <b>Строгость: обычная</b>\n"
+            "Оценки идут ровно по твоей разметке.\n"
+            f"{LINE}\n{STRICT_USAGE}"
+        )
+    return (
+        f"🎚 <b>Строгость: {value:+.1f}</b>\n"
+        f"Все оценки {'ниже' if value < 0 else 'выше'} размеченных на "
+        f"{abs(value):.1f}.\n"
+        f"{LINE}\n{STRICT_USAGE}"
+    )
+
+
+def strict_set(value: float) -> str:
+    if not value:
+        return "🎚 <b>Строгость сброшена.</b> Оценки идут ровно по разметке."
+    return (
+        f"🎚 <b>Строгость: {value:+.1f}</b>\n"
+        f"Все новые отчёты станут {'строже' if value < 0 else 'мягче'} на "
+        f"{abs(value):.1f} балла.\n"
+        "<i>Применяется сразу, в боте и в приложении.</i>"
+    )

@@ -207,6 +207,8 @@ def create_app(
                     ),
                 )
 
+        await _apply_strictness()
+
         in_demo = in_demo_check
         profile = rating.DEMO if in_demo else rating.NORMAL
         face: rating.FaceMetrics | None = None
@@ -506,6 +508,14 @@ def create_app(
         return result
 
     # ─────────────────────────── хелперы ───────────────────────────────
+
+    async def _apply_strictness() -> None:
+        """Настройка живёт в базе, поэтому читаем её перед каждой оценкой."""
+        value = await db.get_setting("strictness")
+        try:
+            rating.set_strictness(float(value or 0))
+        except (TypeError, ValueError):
+            rating.set_strictness(0.0)
 
     async def _gift_scans() -> int:
         """
