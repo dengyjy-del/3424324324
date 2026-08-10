@@ -788,6 +788,23 @@ function renderReport(report) {
     dbg.classList.add("hidden");
   }
 
+  // Четыре категории — так разбор читают в луксмаксинге
+  $("res-categories").innerHTML = (report.categories || [])
+    .map((cat) => {
+      const parts = cat.parts
+        .map((p) => `${p.title} ${p.value.toFixed(1)}`)
+        .join(" · ");
+      return `<div class="cat">
+          <span class="cat-emoji">${cat.emoji}</span>
+          <span class="cat-body">
+            <b>${cat.title}</b>
+            <span class="tiny">${parts}</span>
+          </span>
+          <span class="cat-value numeral">${cat.value.toFixed(1)}</span>
+        </div>`;
+    })
+    .join("");
+
   const measurements = report.measurements || [];
   $("res-measure-card").classList.toggle("hidden", measurements.length === 0);
   $("res-measurements").innerHTML = measurements
@@ -990,7 +1007,7 @@ const TIER_HINTS = [
   ["MTN", 4.6], ["HTN", 5.9], ["Chadlite", 6.9], ["Chad", 8.0],
 ];
 
-const labeling = { queue: [], current: null, done: 0, saved: 0 };
+const labeling = { queue: [], current: null, done: 0, saved: 0, refresh: false };
 
 function showProgress(text) {
   $("lb-progress").innerHTML =
@@ -1029,6 +1046,22 @@ async function nextLabel() {
         metrics: found.metrics,
         url,
       };
+
+      // Режим пересчёта: у размеченных фото молча обновляем замеры и
+      // сразу переходим к следующему, оценку трогать незачем.
+      if (labeling.refresh) {
+        const body = new FormData();
+        body.append("photo_hash", labeling.current.hash);
+        body.append("score", "5");
+        body.append("metrics", JSON.stringify(found.metrics));
+        try {
+          const res = await api("/api/label", { method: "POST", body });
+          if (res.refreshed) labeling.saved += 1;
+        } catch (_) {}
+        URL.revokeObjectURL(url);
+        continue;
+      }
+
       $("lb-work").classList.remove("hidden");
       return;
     } catch (_) {
@@ -1038,9 +1071,12 @@ async function nextLabel() {
 
   showProgress(
     labeling.saved
-      ? `Готово. Сохранено в этот заход: ${labeling.saved}`
+      ? (labeling.refresh
+          ? `Готово. Пересчитано замеров: ${labeling.saved}`
+          : `Готово. Сохранено в этот заход: ${labeling.saved}`)
       : "Выбери фото, чтобы начать"
   );
+  labeling.refresh = false;
   labeling.current = null;
 }
 
@@ -1057,9 +1093,9 @@ async function saveLabel() {
     const result = await api("/api/label", { method: "POST", body });
     labeling.saved += 1;
     toast(
-      result.added
-        ? `Сохранено. Всего примеров: ${result.total}`
-        : `Это фото уже размечено. Всего: ${result.total}`
+      result.refreshed
+        ? `Замеры обновлены, оценка ${result.score} сохранена`
+        : `Сохранено. Всего примеров: ${result.total}`
     );
   } catch (error) {
     toast(error.message);
@@ -1094,6 +1130,15 @@ function initLabeling() {
     labeling.saved = 0;
     event.target.value = "";
     if (labeling.queue.length) nextLabel();
+  });
+
+  $("lb-refresh").addEventListener("click", () => {
+    labeling.refresh = true;
+    $("lb-files").click();
+  });
+
+  $("lb-pick").addEventListener("click", () => {
+    labeling.refresh = false;
   });
 
   $("lb-save").addEventListener("click", saveLabel);

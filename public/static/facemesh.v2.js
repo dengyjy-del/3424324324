@@ -158,6 +158,15 @@ export function computeMetrics(landmarks, width, height) {
     pt(P.lipTop)
   ) || 1;
 
+  // Замеры, которые в луксмаксинге считают отдельно. В модель они пока не
+  // входят — им нужна своя разметка, — но копятся с каждым отчётом и войдут
+  // при следующем переобучении.
+  const mouthWidth = dist(pt(61), pt(291));
+  const eyeWidthAvg =
+    (dist(pt(P.eyeLOuter), pt(P.eyeLInner)) + dist(pt(P.eyeROuter), pt(P.eyeRInner))) / 2;
+  const innerGap = dist(pt(P.eyeLInner), pt(P.eyeRInner));
+  const lowerThirdLen = dist(subnasale, chin) || 1;
+
   // Глубина. Face Mesh отдаёт z для каждой точки, и рельеф оказался
   // сильнее геометрии: у плоского лица подбородок и нос почти не
   // выступают, тогда как ширина лица одинакова и у полного, и у
@@ -196,6 +205,20 @@ export function computeMetrics(landmarks, width, height) {
     yaw,
     roll,
     face_share: faceWidth / width,   // насколько лицо крупное в кадре
+
+    nose_length: dist(glabella, subnasale) / faceHeight,
+    // Носогубный угол здесь не считается: он профильный, а на анфас точки
+    // носа и губы лежат почти на одной вертикали и угол вырождается в 180°.
+    // Вместо него — форма носа: длина к ширине, она измерима спереди.
+    nose_shape:
+      dist(glabella, subnasale) / (dist(pt(P.noseL), pt(P.noseR)) || 1),
+    philtrum: dist(subnasale, pt(P.lipTop)) / lowerThirdLen,
+    lip_height: dist(pt(P.lipTop), pt(17)) / (mouthWidth || 1),
+    mouth_width: mouthWidth / (faceWidth || 1),
+    eye_spacing: innerGap / (faceWidth || 1),
+    esr: innerGap / (eyeWidthAvg || 1),
+    forehead_height: dist(forehead, glabella) / faceHeight,
+
     relief,
     nose_proj: z(1) - z(P.glabella),
     cheek_proj: (z(P.cheekL) + z(P.cheekR)) / 2 - z(1),

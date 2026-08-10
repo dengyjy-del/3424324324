@@ -271,6 +271,7 @@ def create_app(
 
         payload = _report_payload(report, hide_id=in_demo)
         payload["model_version"] = rating.MODEL_VERSION
+        payload["categories"] = rating.category_scores(report)
         # Владельцу отдаём сырые замеры: по ним видно, что именно посчитал
         # браузер, и совпадает ли это с тем, что считаю я при разборе жалоб.
         if config.is_admin(user.id) and face is not None:
@@ -456,6 +457,20 @@ def create_app(
         metrics = json.dumps(dataclasses.asdict(checked))
 
         try:
+            # Если фото уже размечено, обновляем у него замеры и оставляем
+            # прежнюю оценку. Так после появления новых признаков всю
+            # выборку можно пересчитать, не проставляя баллы заново.
+            existing = await db.refresh_label(photo_hash[:32], metrics)
+            if existing is not None:
+                stats = await db.label_stats()
+                return {
+                    "ok": True,
+                    "added": False,
+                    "refreshed": True,
+                    "score": existing,
+                    "total": stats["total"],
+                }
+
             added = await db.add_label(photo_hash[:32], round(score, 2), metrics)
             stats = await db.label_stats()
         except Exception as error:  # noqa: BLE001

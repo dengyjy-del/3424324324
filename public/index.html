@@ -303,6 +303,13 @@
       <div class="glass pad hidden" style="margin-top:12px" id="res-confidence"></div>
 
       <div class="glass" style="margin-top:12px">
+        <div class="pad" style="padding-bottom:10px">
+          <p class="eyebrow">Категории</p>
+        </div>
+        <div id="res-categories"></div>
+      </div>
+
+      <div class="glass" style="margin-top:12px">
         <div class="pad" style="padding-bottom:6px">
           <p class="eyebrow">Детализация</p>
         </div>
@@ -496,6 +503,13 @@
       <button class="btn btn-primary" id="lb-pick" style="margin-top:12px">
         Выбрать фото
       </button>
+      <button class="btn btn-glass" id="lb-refresh" style="margin-top:8px">
+        Пересчитать замеры у размеченных
+      </button>
+      <p class="tiny" style="margin-top:8px;color:var(--ink-3)">
+        Второй кнопкой можно прогнать те же фото заново: замеры обновятся
+        под новые признаки, а проставленные оценки сохранятся.
+      </p>
       <input type="file" id="lb-files" accept="image/*" multiple class="hidden">
     </div>
 

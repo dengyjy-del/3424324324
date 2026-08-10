@@ -461,6 +461,17 @@ class FaceMetrics:
     skin_variance: float = 0.11
     skin_redness: float = 0.35
 
+    # Замеры из луксмаксинга. В балле пока не участвуют: им нужна своя
+    # разметка. Копятся с каждым отчётом и войдут при переобучении.
+    nose_length: float = 0.31
+    nose_shape: float = 1.15
+    philtrum: float = 0.33
+    lip_height: float = 0.24
+    mouth_width: float = 0.37
+    eye_spacing: float = 0.26
+    esr: float = 1.27
+    forehead_height: float = 0.30
+
     # Качество снимка. В балл не входит — показывается отдельно, но
     # сохраняется в разметке: по нему видно, какие примеры надёжнее.
     yaw: float = 0.0
@@ -515,6 +526,14 @@ class FaceMetrics:
                     ("brow_contrast", 0.0, 1.0, 0.10),
                     ("skin_variance", 0.0, 1.0, 0.11),
                     ("skin_redness", -1.0, 2.0, 0.35),
+                    ("nose_length", 0.1, 0.6, 0.31),
+                    ("nose_shape", 0.5, 3.0, 1.15),
+                    ("philtrum", 0.1, 0.7, 0.33),
+                    ("lip_height", 0.05, 0.7, 0.24),
+                    ("mouth_width", 0.2, 0.7, 0.37),
+                    ("eye_spacing", 0.12, 0.45, 0.26),
+                    ("esr", 0.8, 2.0, 1.27),
+                    ("forehead_height", 0.1, 0.6, 0.30),
                     ("yaw", 0.0, 1.0, 0.0),
                     ("roll", 0.0, 90.0, 0.0),
                     ("face_share", 0.05, 1.0, 0.4),
@@ -757,4 +776,51 @@ def metrics_readout(metrics: FaceMetrics) -> list[dict]:
         {"emoji": "🗿", "title": "Челюсть к скулам", "value": f"{metrics.jaw_ratio:.2f}"},
         {"emoji": "🦅", "title": "Раскрытие глаз", "value": f"{metrics.eye_aspect:.2f}"},
         {"emoji": "🔻", "title": "Ширина носа", "value": f"{metrics.nose_ratio:.2f}"},
+        {"emoji": "📏", "title": "Длина носа", "value": f"{metrics.nose_length:.2f}"},
+        {"emoji": "👃", "title": "Форма носа", "value": f"{metrics.nose_shape:.2f}"},
+        {"emoji": "🫦", "title": "Высота губ", "value": f"{metrics.lip_height:.2f}"},
+        {"emoji": "↔️", "title": "Ширина рта", "value": f"{metrics.mouth_width:.2f}"},
+        {"emoji": "👀", "title": "Расстояние между глазами", "value": f"{metrics.esr:.2f}"},
+        {"emoji": "🧠", "title": "Высота лба", "value": f"{metrics.forehead_height:.2f}"},
+        {"emoji": "💋", "title": "Филтрум", "value": f"{metrics.philtrum:.2f}"},
     ]
+
+
+# ═══════════════════════ КАТЕГОРИИ ОТЧЁТА ══════════════════════════════════
+#
+# Разбивка, принятая в луксмаксинге: гармония, диморфизм, угловатость и
+# всё остальное. Это способ подачи, а не отдельный расчёт — баллы берутся
+# из тех же параметров, просто сгруппированы так, как их привыкли читать.
+
+CATEGORIES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("harmony", "🔷", "Гармония", ("proportions", "symmetry", "nose")),
+    ("dimorphism", "🗿", "Диморфизм", ("jawline", "gonial_angle", "chin")),
+    ("angularity", "💎", "Угловатость", ("cheekbones", "canthal_tilt")),
+    ("misc", "✨", "Прочее", ("skin", "hunter_eyes")),
+)
+
+
+def category_scores(report: "Report") -> list[dict]:
+    """Баллы по четырём категориям — среднее входящих параметров."""
+    by_key = {score.parameter.key: score.value for score in report.scores}
+    out = []
+
+    for key, emoji, title, members in CATEGORIES:
+        values = [by_key[name] for name in members if name in by_key]
+        if not values:
+            continue
+        out.append(
+            {
+                "key": key,
+                "emoji": emoji,
+                "title": title,
+                "value": round(sum(values) / len(values), 1),
+                "parts": [
+                    {"title": p.title, "value": by_key[p.key]}
+                    for p in PARAMETERS
+                    if p.key in members
+                ],
+            }
+        )
+
+    return out

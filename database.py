@@ -139,6 +139,10 @@ class BaseDatabase(ABC):
         """Сохраняет размеченный пример. False, если такой уже был."""
 
     @abstractmethod
+    async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
+        """Обновляет замеры у размеченного фото. Возвращает его оценку."""
+
+    @abstractmethod
     async def label_stats(self) -> dict: ...
 
     @abstractmethod
@@ -555,6 +559,20 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
         return cursor.rowcount > 0
+
+    async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
+        async with self.conn.execute(
+            "SELECT score FROM labels WHERE photo_id = ?", (photo_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        await self.conn.execute(
+            "UPDATE labels SET metrics = ? WHERE photo_id = ?", (metrics, photo_id)
+        )
+        await self.conn.commit()
+        return float(row["score"])
 
     async def label_stats(self) -> dict:
         async with self.conn.execute(
@@ -1146,6 +1164,18 @@ class PostgresDatabase(BaseDatabase):
                 photo_id, score, metrics,
             )
         return row is not None
+
+    async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
+        async with self.pool.acquire() as conn:
+            score = await conn.fetchval(
+                "SELECT score FROM labels WHERE photo_id = $1", photo_id
+            )
+            if score is None:
+                return None
+            await conn.execute(
+                "UPDATE labels SET metrics = $1 WHERE photo_id = $2", metrics, photo_id
+            )
+        return float(score)
 
     async def label_stats(self) -> dict:
         async with self.pool.acquire() as conn:
