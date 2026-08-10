@@ -1054,9 +1054,11 @@ async function nextLabel() {
         body.append("photo_hash", labeling.current.hash);
         body.append("score", "5");
         body.append("metrics", JSON.stringify(found.metrics));
+        body.append("refresh_only", "1");
         try {
           const res = await api("/api/label", { method: "POST", body });
           if (res.refreshed) labeling.saved += 1;
+          else labeling.skipped = (labeling.skipped || 0) + 1;
         } catch (_) {}
         URL.revokeObjectURL(url);
         continue;
@@ -1072,7 +1074,8 @@ async function nextLabel() {
   showProgress(
     labeling.saved
       ? (labeling.refresh
-          ? `Готово. Пересчитано замеров: ${labeling.saved}`
+          ? `Готово. Пересчитано: ${labeling.saved}` +
+            (labeling.skipped ? `, пропущено незнакомых: ${labeling.skipped}` : "")
           : `Готово. Сохранено в этот заход: ${labeling.saved}`)
       : "Выбери фото, чтобы начать"
   );
@@ -1128,6 +1131,7 @@ function initLabeling() {
     labeling.queue = [...event.target.files];
     labeling.done = 0;
     labeling.saved = 0;
+    labeling.skipped = 0;
     event.target.value = "";
     if (labeling.queue.length) nextLabel();
   });

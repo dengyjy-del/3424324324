@@ -139,6 +139,10 @@ class BaseDatabase(ABC):
         """Сохраняет размеченный пример. False, если такой уже был."""
 
     @abstractmethod
+    async def delete_labels_by_score(self, score: float) -> int:
+        """Удаляет размеченные примеры с точно такой оценкой."""
+
+    @abstractmethod
     async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
         """Обновляет замеры у размеченного фото. Возвращает его оценку."""
 
@@ -559,6 +563,13 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
         return cursor.rowcount > 0
+
+    async def delete_labels_by_score(self, score: float) -> int:
+        cursor = await self.conn.execute(
+            "DELETE FROM labels WHERE ABS(score - ?) < 0.001", (score,)
+        )
+        await self.conn.commit()
+        return cursor.rowcount
 
     async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
         async with self.conn.execute(
@@ -1164,6 +1175,13 @@ class PostgresDatabase(BaseDatabase):
                 photo_id, score, metrics,
             )
         return row is not None
+
+    async def delete_labels_by_score(self, score: float) -> int:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM labels WHERE ABS(score - $1) < 0.001", score
+            )
+        return int(result.split()[-1]) if result else 0
 
     async def refresh_label(self, photo_id: str, metrics: str) -> float | None:
         async with self.pool.acquire() as conn:

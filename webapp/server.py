@@ -432,6 +432,7 @@ def create_app(
         photo_hash: str = Form(...),
         score: float = Form(...),
         metrics: str = Form(...),
+        refresh_only: int = Form(default=0),
         user: TelegramUser = Depends(current_user),
     ) -> dict:
         """
@@ -468,6 +469,20 @@ def create_app(
                     "added": False,
                     "refreshed": True,
                     "score": existing,
+                    "total": stats["total"],
+                }
+
+            # В режиме пересчёта незнакомое фото пропускаем. Иначе оно попадёт
+            # в выборку с оценкой-заглушкой и испортит обучение — так уже
+            # случилось однажды: 83 снимка получили ровно 5.0 и обрушили
+            # качество модели.
+            if refresh_only:
+                stats = await db.label_stats()
+                return {
+                    "ok": True,
+                    "added": False,
+                    "refreshed": False,
+                    "skipped": True,
                     "total": stats["total"],
                 }
 
@@ -512,6 +527,17 @@ def create_app(
         await db.add_label(f"u:{photo_hash[:30]}", round(score, 2), metrics)
         await db.award_xp(user.id, f"feedback:{photo_hash[:16]}", 3)
         return {"ok": True}
+
+    @app.post("/api/labels/cleanup")
+    async def cleanup_labels(
+        score: float = Form(...), user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        """Удаляет записи с указанной оценкой — для чистки заглушек."""
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+        removed = await db.delete_labels_by_score(round(score, 2))
+        stats = await db.label_stats()
+        return {"ok": True, "removed": removed, "total": stats["total"]}
 
     @app.get("/api/labels")
     async def labels(
