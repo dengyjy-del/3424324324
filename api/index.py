@@ -16,6 +16,7 @@ FUNCTION_INVOCATION_FAILED, по которому нельзя понять во
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -40,7 +41,13 @@ app = FastAPI()
 
 # Переменные, без которых приложение не поднимется или будет вести себя странно.
 REQUIRED_VARS = ("BOT_TOKEN",)
-RECOMMENDED_VARS = ("DATABASE_URL", "WEBHOOK_SECRET", "SETUP_KEY", "ADMIN_IDS")
+RECOMMENDED_VARS = (
+    "BOT_TOKENS",
+    "DATABASE_URL",
+    "WEBHOOK_SECRET",
+    "SETUP_KEY",
+    "ADMIN_IDS",
+)
 
 def _redact(text: str) -> str:
     """Локальная обёртка: config может не импортироваться при ранней ошибке."""
@@ -65,7 +72,7 @@ try:
     from aiogram.enums import ParseMode
     from aiogram.types import BotCommand, MenuButtonWebApp, Update, WebAppInfo
     from access import DemoState, SubscriptionGate
-    from config import load_config, redact_secrets
+    from config import load_config, mask_token, redact_secrets
     from database import create_database
     from middlewares import SubscriptionMiddleware, ThrottleMiddleware
     from webapp.server import PUBLIC_DIR, create_app
@@ -96,18 +103,59 @@ try:
     demo = DemoState(db, config.demo_ttl_minutes)
     gate = SubscriptionGate(*config.gate_sources)
 
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    # Боты создаются по требованию, а не все сразу. На холодный старт с
+    # двадцатью зеркалами это экономит около полусекунды: конкретному
+    # апдейту нужен один бот, а не весь список.
+    def _make_bot(token: str) -> Bot:
+        return Bot(
+            token=token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
 
-    app = create_app(config, db, demo, gate, bot)
+    class BotRegistry:
+        """Ленивый доступ к ботам по id. Ведёт себя как словарь на чтение."""
 
+        def __init__(self) -> None:
+            self._cache: dict[str, Bot] = {}
+
+        def get(self, bot_id: str) -> Bot | None:
+            key = str(bot_id).strip()
+            if key in self._cache:
+                return self._cache[key]
+            token = config.token_for(key)
+            if not token:
+                return None
+            self._cache[key] = _make_bot(token)
+            return self._cache[key]
+
+        def all(self) -> dict[str, Bot]:
+            """Все боты разом — нужно только для setup и диагностики."""
+            return {bot_id: self.get(bot_id) for bot_id in config.bot_ids}
+
+        def __contains__(self, bot_id: object) -> bool:
+            return bool(config.token_for(str(bot_id)))
+
+        def __iter__(self):
+            return iter(config.bot_ids)
+
+        def __len__(self) -> int:
+            return len(config.bot_ids)
+
+    bots = BotRegistry()
+    bot = bots.get(config.primary_id)
+
+    app = create_app(config, db, demo, gate, bot, bots)
+
+    # Диспетчер один на всех: хендлеры берут бота из самого апдейта
+    # (message.bot), поэтому каждый отвечает от своего имени.
     dispatcher = Dispatcher()
     dispatcher["db"] = db
     dispatcher["config"] = config
     dispatcher["gate"] = gate
     dispatcher["demo"] = demo
+    # Подписку проверяет всегда основной бот. Иначе администратором канала
+    # пришлось бы делать все двадцать зеркал — а так достаточно одного.
+    dispatcher["gate_bot"] = bot
 
     _throttle = ThrottleMiddleware(config.cooldown_seconds)
     _subscription = SubscriptionMiddleware()
@@ -116,6 +164,14 @@ try:
         _observer.middleware(_subscription)
 
     dispatcher.include_router(handlers.router)
+
+    # Одинаковое меню команд у основного бота и у всех зеркал.
+    BOT_COMMANDS = [
+        BotCommand(command="start", description="🧬 Главный экран"),
+        BotCommand(command="stats", description="📊 Моя статистика"),
+        BotCommand(command="about", description="ℹ️ О боте"),
+        BotCommand(command="help", description="📖 Справка"),
+    ]
 
 except Exception as error:  # noqa: BLE001 — здесь ловим осознанно
     BOOT_KIND = type(error).__name__
@@ -249,6 +305,13 @@ else:
             "database": "postgres" if config.uses_postgres else "sqlite",
             "webapp_url": config.webapp_url,
             "admin_ids_set": bool(config.admin_ids),
+            # Сколько ботов подхватилось из переменных. Если зеркал меньше,
+            # чем вписано, — токен не прошёл проверку формата.
+            "bots_total": len(bots),
+            "mirrors": len(bots) - 1,
+            "bot_ids": list(bots),
+            "skipped_vars": list(config.rejected_token_vars),
+            "details": "подробности по каждому боту: /api/bots?key=<SETUP_KEY>",
         }
 
         # Гейт подписки — самая частая причина «почему не требует подписку».
@@ -286,11 +349,7 @@ else:
 
         return JSONResponse(info)
 
-    @app.post("/api/telegram")
-    async def telegram_webhook(
-        request: Request,
-        secret: str = Header(default="", alias="X-Telegram-Bot-Api-Secret-Token"),
-    ) -> JSONResponse:
+    async def _handle_update(target: Bot, request: Request, secret: str) -> JSONResponse:
         # Секрет задаётся при регистрации вебхука и приходит в заголовке.
         # Без него адрес вебхука мог бы дёргать кто угодно.
         if config.webhook_secret and secret != config.webhook_secret:
@@ -299,7 +358,7 @@ else:
         payload = await request.json()
 
         try:
-            await dispatcher.feed_webhook_update(bot, Update.model_validate(payload))
+            await dispatcher.feed_webhook_update(target, Update.model_validate(payload))
         except Exception:
             # Отвечать ошибкой нельзя: любой не-200 Telegram считает недоставкой
             # и шлёт тот же апдейт снова. На serverless это цикл из повторов и
@@ -308,12 +367,50 @@ else:
 
         return JSONResponse({"ok": True})
 
-    @app.get("/api/setup")
-    async def setup(key: str = "") -> JSONResponse:
+    @app.post("/api/telegram")
+    async def telegram_webhook(
+        request: Request,
+        secret: str = Header(default="", alias="X-Telegram-Bot-Api-Secret-Token"),
+    ) -> JSONResponse:
+        """Адрес без id — основной бот. Оставлен ради старых вебхуков."""
+        return await _handle_update(bot, request, secret)
+
+    @app.post("/api/telegram/{bot_key}")
+    async def telegram_webhook_for(
+        bot_key: str,
+        request: Request,
+        secret: str = Header(default="", alias="X-Telegram-Bot-Api-Secret-Token"),
+    ) -> JSONResponse:
         """
-        Открыть один раз после деплоя:
+        По адресу на каждого бота: /api/telegram/<id бота>.
+
+        Telegram не сообщает в апдейте, какому боту тот адресован, — узнать
+        это можно только по адресу, на который он пришёл. Поэтому id зашит
+        в путь. Секретом id не является: он и так виден всем в @username_bot
+        через getMe, а от чужих запросов защищает заголовок с секретом.
+        """
+        target = bots.get(bot_key.strip())
+        if target is None:
+            # 200, а не 404: на ошибку Telegram будет слать апдейт повторно
+            # часами. Токен убрали из переменных — вебхук надо снять, а не
+            # ронять функцию.
+            logger.warning(
+                "Апдейт для неизвестного бота %s — токена нет в переменных",
+                bot_key,
+            )
+            return JSONResponse({"ok": True, "ignored": "unknown bot"})
+
+        return await _handle_update(target, request, secret)
+
+    @app.get("/api/setup")
+    async def setup(key: str = "", only: str = "") -> JSONResponse:
+        """
+        Открыть один раз после деплоя — и потом после каждого добавления
+        зеркала:
             https://<домен>/api/setup?key=<SETUP_KEY>
-        Повторный вызов безопасен.
+
+        Настраивает разом основного бота и все зеркала. Повторный вызов
+        безопасен. Один бот отдельно: &only=<id бота>.
         """
         if not config.setup_key:
             raise HTTPException(
@@ -343,36 +440,162 @@ else:
                 status_code=400, detail="Не удалось определить адрес: задай WEBAPP_URL"
             )
 
-        await bot.set_webhook(
-            url=f"{base}/api/telegram",
-            secret_token=config.webhook_secret or None,
-            drop_pending_updates=True,
-            allowed_updates=["message", "callback_query", "my_chat_member"],
-        )
-        await bot.set_my_commands(
-            [
-                BotCommand(command="start", description="🧬 Главный экран"),
-                BotCommand(command="stats", description="📊 Моя статистика"),
-                BotCommand(command="about", description="ℹ️ О боте"),
-                BotCommand(command="help", description="📖 Справка"),
-            ]
-        )
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="Приложение", web_app=WebAppInfo(url=base))
-        )
+        targets = _select_bots(only)
+        if not targets:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Бот «{only}» не найден. Настроенные id: "
+                + ", ".join(bots) ,
+            )
 
-        me = await bot.get_me()
-        info = await bot.get_webhook_info()
+        results = await _setup_many(targets, base)
+        failed = [r for r in results if not r["ok"]]
 
         return JSONResponse(
-            {
-                "ok": True,
-                "bot": f"@{me.username}",
-                "webhook": info.url,
+            status_code=200 if not failed else 207,
+            content={
+                "ok": not failed,
+                "bots_total": len(results),
+                "bots_ok": len(results) - len(failed),
                 "webapp": base,
                 "database": "postgres"
                 if "postgres" in config.database_url
                 else "sqlite (на Vercel данные будут теряться!)",
-                "next": "Открой бота в Telegram и отправь /start",
+                "bots": results,
+                "skipped_vars": list(config.rejected_token_vars),
+                "next": "Открой любого из ботов в Telegram и отправь /start"
+                if not failed
+                else "Часть ботов не настроилась — смотри поле error у них. "
+                "Исправь токен и открой этот адрес ещё раз, "
+                "можно точечно: /api/setup?key=...&only=<id бота>",
+            },
+        )
+
+    async def _setup_one(bot_id: str, target: Bot, base: str) -> dict:
+        """Настройка одного бота. Ошибка одного не мешает остальным."""
+        result: dict = {"id": bot_id, "ok": False, "token": mask_token(target.token)}
+        try:
+            me = await target.get_me()
+            result["bot"] = f"@{me.username}"
+
+            await target.set_webhook(
+                url=f"{base}/api/telegram/{bot_id}",
+                secret_token=config.webhook_secret or None,
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query", "my_chat_member"],
+            )
+            await target.set_my_commands(BOT_COMMANDS)
+            await target.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="Приложение", web_app=WebAppInfo(url=base)
+                )
+            )
+
+            info = await target.get_webhook_info()
+            result["webhook"] = info.url
+            result["ok"] = True
+        except Exception as error:  # noqa: BLE001 — причину показываем владельцу
+            result["error"] = f"{type(error).__name__}: {_redact(str(error))[:200]}"
+            if "Unauthorized" in str(error):
+                result["hint"] = (
+                    "Токен недействителен: бот удалён или токен перевыпущен "
+                    "в @BotFather. Обнови переменную и передеплой."
+                )
+        return result
+
+    async def _setup_many(targets: dict[str, Bot], base: str) -> list[dict]:
+        """
+        Настраиваем ботов параллельно, но не все разом.
+
+        Последовательно двадцать ботов по четыре запроса каждый не уложатся
+        в лимит времени функции. Семафор держит нагрузку в разумных рамках,
+        чтобы Telegram не начал отвечать 429.
+        """
+        limit = asyncio.Semaphore(6)
+
+        async def worker(bot_id: str, target: Bot) -> dict:
+            async with limit:
+                return await _setup_one(bot_id, target, base)
+
+        return list(
+            await asyncio.gather(
+                *(worker(bot_id, target) for bot_id, target in targets.items())
+            )
+        )
+
+    def _select_bots(only: str) -> dict[str, Bot]:
+        """Пусто — все боты. Иначе — один по id или по номеру в списке."""
+        only = (only or "").strip().lstrip("@")
+        if not only:
+            return bots.all()
+        target = bots.get(only)
+        if target is not None:
+            return {only: target}
+        if only.isdigit():
+            index = int(only) - 1
+            ids = list(bots)
+            if 0 <= index < len(ids):
+                return {ids[index]: bots.get(ids[index])}
+        return {}
+
+    @app.get("/api/bots")
+    async def bots_status(key: str = "") -> JSONResponse:
+        """
+        Состояние всех ботов сразу: кто отвечает, куда смотрит вебхук,
+        нет ли зависших апдейтов. Первое место, куда смотреть, если
+        «зеркало молчит».
+        """
+        if not config.setup_key or key != config.setup_key:
+            raise HTTPException(status_code=403, detail="Неверный ключ")
+
+        base = config.webapp_url
+
+        async def one(bot_id: str, target: Bot) -> dict:
+            row: dict = {"id": bot_id, "ok": False, "token": mask_token(target.token)}
+            try:
+                me = await target.get_me()
+                row["bot"] = f"@{me.username}"
+                info = await target.get_webhook_info()
+                row["webhook"] = info.url or ""
+                row["expected"] = f"{base}/api/telegram/{bot_id}"
+                # Совпадение адреса — главная проверка: чаще всего зеркало
+                # молчит именно потому, что вебхук ему никто не поставил.
+                row["webhook_ok"] = info.url in (
+                    row["expected"],
+                    f"{base}/api/telegram" if bot_id == config.primary_id else "",
+                )
+                row["pending"] = info.pending_update_count
+                if info.last_error_message:
+                    row["last_error"] = info.last_error_message[:160]
+                row["ok"] = bool(row["webhook_ok"])
+                if not row["webhook_ok"]:
+                    row["hint"] = (
+                        "Вебхук не выставлен или указывает не туда — "
+                        "открой /api/setup?key=...&only=" + bot_id
+                    )
+            except Exception as error:  # noqa: BLE001
+                row["error"] = f"{type(error).__name__}: {_redact(str(error))[:160]}"
+            return row
+
+        limit = asyncio.Semaphore(6)
+
+        async def worker(bot_id: str, target: Bot) -> dict:
+            async with limit:
+                return await one(bot_id, target)
+
+        rows = list(
+            await asyncio.gather(
+                *(worker(bot_id, target) for bot_id, target in bots.all().items())
+            )
+        )
+
+        return JSONResponse(
+            {
+                "ok": all(row["ok"] for row in rows),
+                "primary": config.primary_id,
+                "total": len(rows),
+                "working": sum(1 for row in rows if row["ok"]),
+                "skipped_vars": list(config.rejected_token_vars),
+                "bots": rows,
             }
         )

@@ -53,8 +53,26 @@ def create_app(
     demo: DemoState,
     gate: SubscriptionGate | None = None,
     bot=None,
+    bots: dict[str, object] | None = None,
 ) -> FastAPI:
+    """
+    bot  — основной бот: через него проверяется подписка и уходят служебные
+           запросы, поэтому админом канала достаточно сделать только его.
+    bots — все боты по id, включая зеркала. Нужен, чтобы подставлять в
+           интерфейс имя того бота, через которого пользователь пришёл.
+    """
     app = FastAPI(title="Looksmax Mini App", docs_url=None, redoc_url=None)
+
+    def _bot_by_id(bot_id: str):
+        """
+        Бот по id. Принимает и обычный словарь, и ленивый реестр с Vercel —
+        от объекта нужен только метод get. Неизвестный id — основной бот.
+        """
+        if bots is not None and bot_id:
+            found = bots.get(str(bot_id))
+            if found is not None:
+                return found
+        return bot
 
     @app.exception_handler(Exception)
     async def any_error(request, error: Exception) -> JSONResponse:
@@ -72,18 +90,23 @@ def create_app(
             },
         )
 
-    # Имя бота, чей токен настроен. Нужно, чтобы в ошибке подписи сразу было
-    # видно, через какого бота приложение обязано открываться.
+    # Имена ботов по id. Кешируем: getMe на каждый запрос — лишний поход в
+    # Telegram, а имя меняется раз в жизни.
     bot_name_cache: dict[str, str] = {}
 
-    async def configured_bot_name() -> str:
-        if "name" not in bot_name_cache and bot is not None:
+    async def configured_bot_name(bot_id: str = "") -> str:
+        """Имя бота, через которого открыт мини-апп. Пусто = основной."""
+        key = str(bot_id or config.primary_id)
+        if key not in bot_name_cache:
+            target = _bot_by_id(key)
+            if target is None:
+                return ""
             try:
-                me = await bot.get_me()
-                bot_name_cache["name"] = f"@{me.username}"
+                me = await target.get_me()
+                bot_name_cache[key] = f"@{me.username}"
             except Exception:  # noqa: BLE001 — имя не критично
-                bot_name_cache["name"] = ""
-        return bot_name_cache.get("name", "")
+                bot_name_cache[key] = ""
+        return bot_name_cache.get(key, "")
 
     # ─────────────────────────── авторизация ───────────────────────────
 
@@ -93,16 +116,11 @@ def create_app(
     ) -> TelegramUser:
         init_data = x_init_data or authorization.removeprefix("tma ").strip()
         try:
-            return verify_init_data(init_data, config.bot_token)
+            # Проверяем сразу по всем токенам: приложение одно на основного
+            # бота и на все зеркала.
+            return verify_init_data(init_data, config.bot_tokens)
         except AuthError as error:
-            detail = str(error)
-            name = await configured_bot_name()
-            if name and "подпись" in detail.lower():
-                detail = (
-                    f"{detail} Сейчас на сервере настроен бот {name} — "
-                    "открывай приложение через него."
-                )
-            raise HTTPException(status_code=401, detail=detail) from error
+            raise HTTPException(status_code=401, detail=str(error)) from error
 
     # ──────────────────────────── страницы ─────────────────────────────
 
@@ -138,8 +156,10 @@ def create_app(
             "min_age": config.min_age,
             "brand": config.brand_name,
             # Нужен для карточки «поделиться»: подпись не зашита в код,
-            # поэтому при смене бота ничего править не придётся.
-            "bot_username": await configured_bot_name(),
+            # поэтому при смене бота ничего править не придётся. У зеркал
+            # подставляется имя того бота, через которого человек вошёл, —
+            # иначе приглашения из зеркала уводили бы на основного бота.
+            "bot_username": await configured_bot_name(user.bot_id),
             "is_admin": config.is_admin(user.id),
             "theme": await db.get_theme(user.id) or "classic",
             "model_version": rating.MODEL_VERSION,

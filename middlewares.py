@@ -88,7 +88,11 @@ class SubscriptionMiddleware(BaseMiddleware):
         if self._is_exempt(event, config):
             return await handler(event, data)
 
-        bot: Bot = data["bot"]
+        # Членство в канале проверяет основной бот, а не тот, кому пришёл
+        # апдейт: getChatMember разрешён только участнику канала, и иначе
+        # администратором пришлось бы делать каждое зеркало. Ответ Telegram
+        # от этого не зависит — статус пользователя один и тот же.
+        bot: Bot = data.get("gate_bot") or data["bot"]
         if await gate.is_member(bot, user.id):
             return await handler(event, data)
 

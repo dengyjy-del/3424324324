@@ -7,7 +7,7 @@ import contextlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
@@ -144,13 +144,18 @@ async def cmd_audience(message: Message, db: Database, config: Config) -> None:
 
 
 @router.message(Command("checkgate"))
-async def cmd_checkgate(message: Message, config: Config) -> None:
+async def cmd_checkgate(
+    message: Message, config: Config, gate_bot: Bot | None = None
+) -> None:
     """
     Проверка гейта по шагам. Только для ID из ADMIN_IDS.
 
     Нужна, потому что при ошибке проверки источник пропускается молча —
     иначе кривой конфиг заблокировал бы всех пользователей разом. Побочный
     эффект: снаружи неработающая проверка выглядит как выключенная.
+
+    Проверяем от имени основного бота — именно он ходит в канал за статусом
+    подписки, даже когда команду прислали в зеркало.
     """
     user = message.from_user
     if user is None:
@@ -160,8 +165,22 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
         await message.answer("🚫 Команда только для владельца.")
         return
 
+    checker = gate_bot or message.bot
     sources = [("Канал", config.channel_id), ("Чат", config.chat_id)]
     lines = ["🔎 <b>ПРОВЕРКА ДОСТУПА</b>", texts.LINE]
+
+    if len(config.bot_tokens) > 1:
+        try:
+            who = await checker.get_me()
+            lines.append(
+                f"Ботов подключено: <b>{len(config.bot_tokens)}</b> "
+                f"(основной + {len(config.bot_tokens) - 1} зеркал)"
+            )
+            lines.append(f"Подписку проверяет: @{texts.safe(who.username or '—')}")
+            lines.append("<i>Админом канала нужен только он.</i>")
+            lines.append(texts.LINE)
+        except TelegramAPIError:
+            pass
 
     for label, chat_id in sources:
         if not chat_id:
@@ -170,14 +189,14 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
 
         lines.append(f"<b>{label}</b> — <code>{texts.safe(chat_id)}</code>")
         try:
-            chat = await message.bot.get_chat(chat_id)
+            chat = await checker.get_chat(chat_id)
             lines.append(f"  ✅ найден: {texts.safe(chat.title or '—')}")
         except TelegramAPIError as error:
             lines.append(f"  ❌ не найден: {texts.safe(str(error)[:90])}")
             continue
 
         try:
-            me = await message.bot.get_chat_member(chat_id, message.bot.id)
+            me = await checker.get_chat_member(chat_id, checker.id)
             ok = me.status in ("administrator", "creator")
             lines.append(
                 "  ✅ бот администратор" if ok
@@ -188,7 +207,7 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
             continue
 
         try:
-            member = await message.bot.get_chat_member(chat_id, user.id)
+            member = await checker.get_chat_member(chat_id, user.id)
             lines.append(f"  ✅ проверка участника работает (твой статус: {member.status})")
         except TelegramAPIError as error:
             lines.append(f"  ❌ участника не проверить: {texts.safe(str(error)[:70])}")
@@ -197,8 +216,8 @@ async def cmd_checkgate(message: Message, config: Config) -> None:
     # одному и тому же месту дважды, и подписка на чат фактически не нужна.
     if config.channel_id and config.chat_id:
         try:
-            first = await message.bot.get_chat(config.channel_id)
-            second = await message.bot.get_chat(config.chat_id)
+            first = await checker.get_chat(config.channel_id)
+            second = await checker.get_chat(config.chat_id)
             if first.id == second.id:
                 lines += [
                     texts.LINE,

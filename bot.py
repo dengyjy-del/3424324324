@@ -4,6 +4,7 @@ LOOKSMAX ANALYSIS BOT — точка входа.
 Запуск:
     pip install -r requirements.txt
     cp .env.example .env   # и вписать BOT_TOKEN от @BotFather
+                           # зеркала — в BOT_TOKENS через запятую
     python bot.py
 """
 
@@ -79,10 +80,13 @@ def _log_setup(config: Config) -> None:
 
 
 async def run(config: Config) -> None:
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    # Один процесс тянет и основного бота, и зеркала: у aiogram один
+    # диспетчер умеет опрашивать несколько ботов сразу.
+    bots = [
+        Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        for token in config.bot_tokens
+    ]
+    bot = bots[0]
 
     texts.configure(config.brand_name)
 
@@ -96,6 +100,8 @@ async def run(config: Config) -> None:
     dispatcher["gate"] = gate
     demo_state = DemoState(db, config.demo_ttl_minutes)
     dispatcher["demo"] = demo_state
+    # Подписку проверяет основной бот — админом канала достаточно сделать его.
+    dispatcher["gate_bot"] = bot
 
     throttle = ThrottleMiddleware(config.cooldown_seconds)
     subscription = SubscriptionMiddleware()
@@ -107,50 +113,68 @@ async def run(config: Config) -> None:
 
     tasks = []
     if config.webapp_enabled:
-        tasks.append(asyncio.create_task(_serve_webapp(config, db, demo_state, gate, bot)))
+        registry = {token.split(":", 1)[0]: item for token, item in zip(config.bot_tokens, bots)}
+        tasks.append(
+            asyncio.create_task(
+                _serve_webapp(config, db, demo_state, gate, bot, registry)
+            )
+        )
         logger.info("Мини-апп: %s (порт %s)", config.webapp_url, config.webapp_port)
     else:
         logger.info("Мини-апп выключен (WEBAPP_URL пуст)")
 
     try:
-        await bot.set_my_commands(COMMANDS)
-        me = await bot.get_me()
-        logger.info("Бот запущен: @%s", me.username)
+        hooked = False
+        for index, current in enumerate(bots):
+            await current.set_my_commands(COMMANDS)
+            me = await current.get_me()
+            role = "Основной бот" if index == 0 else f"Зеркало {index}"
+            logger.info("%s запущен: @%s", role, me.username)
+
+            if config.webapp_enabled:
+                await current.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="Приложение", web_app=WebAppInfo(url=config.webapp_url)
+                    )
+                )
+
+            # Локальный режим работает на polling, а он несовместим с
+            # вебхуком: Telegram разрешает что-то одно. Поэтому вебхук
+            # приходится снять — но это выключает бота, поднятого на Vercel,
+            # поэтому предупреждаем.
+            hook = await current.get_webhook_info()
+            hooked = hooked or bool(hook.url)
+            await current.delete_webhook(drop_pending_updates=True)
+
+        if len(bots) > 1:
+            logger.info("Всего ботов: %s (основной + %s зеркал)", len(bots), len(bots) - 1)
+
         _log_setup(config)
         _warn_split_database(config)
-        if config.webapp_enabled:
-            await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(
-                    text="Приложение", web_app=WebAppInfo(url=config.webapp_url)
-                )
-            )
-        # Локальный режим работает на polling, а он несовместим с вебхуком:
-        # Telegram разрешает что-то одно. Поэтому вебхук приходится снять —
-        # но это выключает бота, поднятого на Vercel, поэтому предупреждаем.
-        hook = await bot.get_webhook_info()
-        if hook.url:
+
+        if hooked:
             logger.warning("=" * 70)
-            logger.warning("Снимаю вебхук %s", hook.url)
+            logger.warning("Вебхуки сняты со всех ботов.")
             logger.warning(
-                "Бот на хостинге перестанет отвечать, пока работает эта копия."
+                "Копии на хостинге перестанут отвечать, пока работает эта."
             )
             logger.warning(
-                "Чтобы вернуть его: останови этот процесс и открой "
+                "Чтобы вернуть их: останови этот процесс и открой "
                 "<адрес приложения>/api/setup?key=<SETUP_KEY>"
             )
             logger.warning("=" * 70)
 
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dispatcher.start_polling(bot)
+        await dispatcher.start_polling(*bots)
     finally:
         for task in tasks:
             task.cancel()
         await db.close()
-        await bot.session.close()
+        for current in bots:
+            await current.session.close()
         logger.info("Бот остановлен")
 
 
-async def _serve_webapp(config: Config, db, demo: DemoState, gate, bot) -> None:
+async def _serve_webapp(config: Config, db, demo: DemoState, gate, bot, bots=None) -> None:
     """Мини-апп живёт в том же процессе и на том же event loop, что и бот."""
     import uvicorn
 
@@ -158,7 +182,7 @@ async def _serve_webapp(config: Config, db, demo: DemoState, gate, bot) -> None:
 
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(config, db, demo, gate, bot),
+            create_app(config, db, demo, gate, bot, bots),
             host=config.webapp_host,
             port=config.webapp_port,
             log_level="warning",

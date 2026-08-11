@@ -13,7 +13,12 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Config:
+    # Токены всех ботов: первый — основной, остальные — зеркала.
+    # bot_token оставлен отдельным полем, чтобы не переписывать код,
+    # который знает только про одного бота.
     bot_token: str
+    bot_tokens: tuple[str, ...]
+    rejected_token_vars: tuple[str, ...]
     brand_name: str
     database_url: str
     score_salt: str
@@ -54,6 +59,30 @@ class Config:
     def uses_postgres(self) -> bool:
         return self.database_url.startswith(("postgres://", "postgresql://"))
 
+    # ─────────────────────────── зеркала ────────────────────────────────
+
+    @property
+    def mirror_tokens(self) -> tuple[str, ...]:
+        """Все токены, кроме основного."""
+        return self.bot_tokens[1:]
+
+    @property
+    def bot_ids(self) -> tuple[str, ...]:
+        """Публичные id ботов — числа до двоеточия в токене."""
+        return tuple(bot_id_of(token) for token in self.bot_tokens)
+
+    @property
+    def primary_id(self) -> str:
+        return bot_id_of(self.bot_token)
+
+    def token_for(self, bot_id: str | int) -> str:
+        """Токен по id бота. Пустая строка — такого бота в настройках нет."""
+        wanted = str(bot_id).strip()
+        for token in self.bot_tokens:
+            if bot_id_of(token) == wanted:
+                return token
+        return ""
+
     @property
     def gate_sources(self) -> tuple[str, ...]:
         return tuple(x for x in (self.channel_id, self.chat_id) if x)
@@ -80,6 +109,76 @@ _CREDENTIALS = re.compile(r"://[^:/@\s]+:[^@/\s]+@")
 def redact_secrets(text: str) -> str:
     """Прячет логин и пароль из строк подключения, если они попали в текст."""
     return _CREDENTIALS.sub("://***:***@", text)
+
+
+# ───────────────────────── токены ботов и зеркал ───────────────────────────
+
+# Формат токена BotFather: <числовой id>:<секрет>.
+_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
+
+# До скольких пронумерованных переменных заглядываем: BOT_TOKEN_2 … BOT_TOKEN_50.
+MAX_NUMBERED_TOKENS = 50
+
+
+def bot_id_of(token: str) -> str:
+    """
+    Числовая часть токена — публичный id бота.
+
+    Секретом не является: именно он подставляется в адрес вебхука, чтобы
+    понять, какому из ботов пришёл апдейт.
+    """
+    return token.split(":", 1)[0].strip()
+
+
+def mask_token(token: str) -> str:
+    """Как показывать токен в диагностике: id открыт, секрет скрыт."""
+    return f"{bot_id_of(token)}:***" if token else ""
+
+
+def _split_tokens(raw: str) -> list[str]:
+    """Одна переменная может содержать несколько токенов через запятую."""
+    return [chunk.strip() for chunk in re.split(r"[\s,;]+", raw or "") if chunk.strip()]
+
+
+def _token_variables() -> list[str]:
+    """
+    Имена переменных, в которых ищем токены, в порядке приоритета.
+
+    Поддержаны оба стиля, потому что удобство зависит от количества зеркал:
+    список в одной переменной проще вставить, отдельные переменные проще
+    отключать по одной.
+    """
+    names = ["BOT_TOKEN", "BOT_TOKENS", "MIRROR_TOKENS", "MIRROR_BOT_TOKENS"]
+    names += [f"BOT_TOKEN_{i}" for i in range(2, MAX_NUMBERED_TOKENS + 1)]
+    names += [f"MIRROR_TOKEN_{i}" for i in range(1, MAX_NUMBERED_TOKENS + 1)]
+    return names
+
+
+def collect_tokens() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """
+    Собирает токены из окружения.
+
+    Возвращает (токены, имена переменных с мусором). Первым идёт основной
+    бот — от него зависит проверка подписки и адрес мини-аппа. Дубли
+    отбрасываются по id: один и тот же бот, вписанный дважды, получил бы два
+    вебхука, а победил бы последний.
+    """
+    tokens: list[str] = []
+    rejected: list[str] = []
+    seen: set[str] = set()
+
+    for name in _token_variables():
+        for chunk in _split_tokens(os.getenv(name) or ""):
+            if not _TOKEN_RE.match(chunk):
+                rejected.append(name)
+                continue
+            key = bot_id_of(chunk)
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append(chunk)
+
+    return tuple(tokens), tuple(dict.fromkeys(rejected))
 
 
 def _get_float(name: str, default: float) -> float:
@@ -148,10 +247,28 @@ def _webapp_url() -> str:
 
 
 def load_config() -> Config:
-    token = (os.getenv("BOT_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError(
-            _missing_var("BOT_TOKEN", "Токен выдаёт @BotFather в Telegram.")
+    tokens, rejected = collect_tokens()
+    if not tokens:
+        extra = "Токен выдаёт @BotFather в Telegram."
+        if rejected:
+            extra += (
+                " Значения в "
+                + ", ".join(rejected)
+                + " на токен не похожи: нужен формат 123456789:AA... целиком, "
+                "без кавычек, пробелов и лишних символов."
+            )
+        raise RuntimeError(_missing_var("BOT_TOKEN", extra))
+
+    token = tokens[0]
+    if rejected:
+        # Не роняем запуск из-за одного кривого зеркала: остальные должны
+        # работать. Но молчать нельзя — иначе зеркало «просто не отвечает».
+        import logging
+
+        logging.getLogger("looksmax.config").warning(
+            "Пропущены переменные с некорректными токенами: %s. "
+            "Проверь формат: 123456789:AA...",
+            ", ".join(rejected),
         )
 
     channel_id = (os.getenv("CHANNEL_ID") or "").strip()
@@ -174,6 +291,8 @@ def load_config() -> Config:
 
     return Config(
         bot_token=token,
+        bot_tokens=tokens,
+        rejected_token_vars=rejected,
         brand_name=(os.getenv("BRAND_NAME") or "LOOKSCORE").strip(),
         database_url=_database_url(),
         # Соль влияет на все оценки. Поменяешь — все отчёты пересчитаются.

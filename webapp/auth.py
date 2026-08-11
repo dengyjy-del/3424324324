@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import parse_qsl
 
@@ -37,6 +38,11 @@ class TelegramUser:
     username: str
     photo_url: str
     language_code: str
+    # id бота, чьей подписью открыт мини-апп. У зеркал он свой, и по нему
+    # приложение подставляет в ссылки «поделиться» того бота, через которого
+    # человек реально пришёл. Хранится именно id, а не токен: секрету незачем
+    # ездить по коду приложения.
+    bot_id: str = ""
 
     @property
     def display_name(self) -> str:
@@ -48,8 +54,24 @@ def _data_check_string(pairs: list[tuple[str, str]]) -> str:
     return "\n".join(f"{key}={value}" for key, value in sorted(pairs))
 
 
-def verify_init_data(init_data: str, bot_token: str, max_age: int = MAX_AUTH_AGE) -> TelegramUser:
-    """Проверяет подпись initData и возвращает пользователя."""
+def verify_init_data(
+    init_data: str,
+    bot_token: str | Iterable[str],
+    max_age: int = MAX_AUTH_AGE,
+) -> TelegramUser:
+    """
+    Проверяет подпись initData и возвращает пользователя.
+
+    Токенов может быть несколько: у каждого зеркала свой, а мини-апп у всех
+    один. Какой именно бот открыл приложение, заранее неизвестно — Telegram
+    этого в initData не пишет, — поэтому подпись сверяется со всеми токенами
+    до первого совпадения. Это дёшево: HMAC на 20 токенов считается за
+    доли миллисекунды.
+    """
+    tokens = [bot_token] if isinstance(bot_token, str) else [t for t in bot_token if t]
+    if not tokens:
+        raise AuthError("на сервере не настроен ни один токен бота")
+
     if not init_data:
         raise AuthError("initData пуст")
 
@@ -69,25 +91,36 @@ def verify_init_data(init_data: str, bot_token: str, max_age: int = MAX_AUTH_AGE
     if not received_hash:
         raise AuthError("в initData нет подписи")
 
-    secret = hmac.new(b"WebAppData", bot_token.strip().encode(), hashlib.sha256).digest()
-
     # Поле signature (Ed25519-подпись для сторонней проверки) Telegram добавил
     # позже самого hash, и в разных версиях клиента оно то участвует в расчёте
     # HMAC, то нет. Оба набора приходят от Telegram, поэтому принимаем любой
     # совпавший — иначе часть пользователей не сможет войти.
-    for candidate in (without_signature, with_signature):
-        expected = hmac.new(
-            secret, _data_check_string(candidate).encode(), hashlib.sha256
-        ).hexdigest()
-        # Сравнение постоянного времени: подпись нельзя подобрать по времени
-        # ответа сервера.
-        if hmac.compare_digest(expected, received_hash):
+    checks = [
+        _data_check_string(candidate).encode()
+        for candidate in (without_signature, with_signature)
+    ]
+
+    matched_token = ""
+    for token in tokens:
+        secret = hmac.new(
+            b"WebAppData", token.strip().encode(), hashlib.sha256
+        ).digest()
+        for check in checks:
+            expected = hmac.new(secret, check, hashlib.sha256).hexdigest()
+            # Сравнение постоянного времени: подпись нельзя подобрать по
+            # времени ответа сервера.
+            if hmac.compare_digest(expected, received_hash):
+                matched_token = token
+                break
+        if matched_token:
             break
-    else:
+
+    if not matched_token:
         raise AuthError(
-            "Подпись Telegram не совпала. Чаще всего это значит, что BOT_TOKEN "
-            "относится к другому боту, а не к тому, через которого открыто "
-            "приложение."
+            "Подпись Telegram не совпала. Приложение открыто через бота, "
+            f"чьего токена нет на сервере (сейчас настроено токенов: "
+            f"{len(tokens)}). Добавь токен этого бота в переменную BOT_TOKENS "
+            "и передеплой проект."
         )
 
     fields = dict(with_signature)
@@ -114,4 +147,5 @@ def verify_init_data(init_data: str, bot_token: str, max_age: int = MAX_AUTH_AGE
         username=str(user.get("username") or ""),
         photo_url=str(user.get("photo_url") or ""),
         language_code=str(user.get("language_code") or ""),
+        bot_id=matched_token.split(":", 1)[0],
     )
