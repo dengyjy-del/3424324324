@@ -7,6 +7,7 @@
 <title>LOOKSCORE</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/app.v2.css">
+<link rel="stylesheet" href="/static/rate.v1.css">
 </head>
 <body>
 
@@ -470,20 +471,17 @@
     </div>
   </section>
 
-  <!-- ══════════════ ГАЙДЫ ══════════════ -->
-  <section class="screen" id="s-guides">
+
+
+  <!-- ══════════════ ОЦЕНКИ (только владельцу) ══════════════ -->
+  <section class="screen" id="s-rate">
     <header style="margin-bottom:16px">
-      <p class="eyebrow">Что реально работает</p>
-      <h1 style="margin-top:6px">Гайды</h1>
+      <p class="eyebrow">Анкеты и оценки</p>
+      <h1 style="margin-top:6px">Оценки</h1>
     </header>
-
-    <div class="glass pad shop-balance" id="shop-balance"></div>
-
-    <p class="eyebrow" style="margin:20px 0 10px">Открываются за XP</p>
-    <div id="shop-list"></div>
-
-    <p class="eyebrow" style="margin:24px 0 10px">Бесплатные</p>
-    <div id="guides-list"></div>
+    <div id="rate-root">
+      <div class="glass pad" id="rate-loading">Загружаем…</div>
+    </div>
   </section>
 
   <!-- ══════════════ РАЗМЕТКА (только владельцу) ══════════════ -->
@@ -566,18 +564,17 @@
       </svg>
       Друзья
     </button>
+    <button class="tab hidden" data-screen="s-rate" id="tab-rate">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l2.6 5.6 6 .8-4.4 4.2 1.1 6L12 16.8 6.7 19.6l1.1-6L3.4 9.4l6-.8z"/>
+      </svg>
+      Оценки
+    </button>
     <button class="tab hidden" data-screen="s-label" id="tab-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>
       </svg>
       Разметка
-    </button>
-    <button class="tab" data-screen="s-guides">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/>
-        <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>
-      </svg>
-      Гайды
     </button>
   </nav>
 
@@ -601,5 +598,6 @@
 
 <div class="toast" id="toast"></div>
 <script type="module" src="/static/app.v2.js"></script>
+<script src="/static/rate.v1.js"></script>
 </body>
 </html>

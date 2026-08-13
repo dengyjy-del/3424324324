@@ -756,6 +756,11 @@ def create_app(
         StaticFiles(directory=STATIC_DIR, check_dir=False),
         name="static",
     )
+    # Раздел оценок: /api/faces/*
+    from mograte.integration import mount_rate_api
+
+    mount_rate_api(app, config, bot)
+
     return app
 
 

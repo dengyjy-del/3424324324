@@ -1,0 +1,151 @@
+/* Раздел «Оценки». Префикс rt- — чтобы ничего не пересеклось с app.v2.css.
+   Цвета шкалы идут от холодного к горячему: по цвету кнопки видно,
+   где она стоит на шкале. Это не декор, а сама шкала. */
+
+#s-rate { padding-bottom: 96px; }
+
+.rt-pane { display: flex; flex-direction: column; gap: 12px; }
+.rt-mid  { align-items: center; text-align: center; padding: 40px 0; }
+
+.rt-h    { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.rt-lead { margin: 0; font-size: 14px; opacity: .65; }
+.rt-body { font-size: 14px; line-height: 1.5; opacity: .8; white-space: pre-line; }
+
+.rt-links { display: flex; gap: 14px; font-size: 14px; }
+.rt-links a { color: #B08327; }
+
+.rt-field { display: flex; flex-direction: column; gap: 6px; }
+.rt-field span {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; opacity: .5;
+}
+.rt-input {
+  width: 100%; padding: 13px 14px; font: inherit; outline: none;
+  color: inherit; background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 13px;
+}
+.rt-input:focus-visible { border-color: #D9662B; }
+.rt-ta { resize: none; margin: 8px 0; }
+.rt-err { min-height: 16px; font-size: 13px; color: #C8305A; }
+
+.rt-btn {
+  padding: 14px 18px; border: 0; border-radius: 13px;
+  font: inherit; font-weight: 600; cursor: pointer; width: 100%;
+}
+.rt-btn:disabled { opacity: .4; }
+.rt-primary { background: #fff; color: #111; }
+.rt-danger  { background: #C8305A; color: #fff; }
+.rt-ghost   {
+  background: transparent; color: inherit; opacity: .7;
+  border: 1px solid rgba(255,255,255,.14); margin-top: 8px;
+}
+
+/* Загрузка фото */
+.rt-drop {
+  position: relative; display: grid; place-items: center;
+  aspect-ratio: 4/5; max-height: 42vh; overflow: hidden;
+  border: 1px dashed rgba(255,255,255,.18); border-radius: 17px;
+  background: rgba(255,255,255,.04); cursor: pointer;
+}
+.rt-drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.rt-drop span {
+  position: relative; z-index: 1; padding: 8px 14px; font-size: 14px;
+  border-radius: 999px; background: rgba(0,0,0,.6);
+}
+
+/* Лента */
+.rt-stage { position: relative; aspect-ratio: 3/4; max-height: 58vh; }
+.rt-card  {
+  position: relative; height: 100%; overflow: hidden;
+  border-radius: 17px; background: rgba(255,255,255,.05);
+  animation: rt-in .22s ease;
+}
+@keyframes rt-in { from { opacity: 0; transform: scale(.985); } }
+.rt-card.rt-out { animation: rt-out .18s ease forwards; }
+@keyframes rt-out { to { opacity: 0; transform: scale(.97); } }
+
+.rt-photo { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rt-scrim {
+  position: absolute; inset: auto 0 0 0; height: 34%; pointer-events: none;
+  background: linear-gradient(to top, rgba(8,9,13,.88), transparent);
+}
+.rt-meta {
+  position: absolute; left: 14px; bottom: 12px;
+  display: flex; align-items: baseline; gap: 8px;
+  text-shadow: 0 1px 12px rgba(0,0,0,.6);
+}
+.rt-meta b    { font-size: 20px; }
+.rt-meta span { font-size: 16px; opacity: .8; }
+
+.rt-flag {
+  position: absolute; top: 10px; right: 10px;
+  width: 34px; height: 34px; border: 0; border-radius: 50%;
+  background: rgba(10,11,15,.55); color: #fff;
+  font-weight: 800; cursor: pointer; backdrop-filter: blur(6px);
+}
+
+/* Штамп: оценка впечатывается в фото, а не уходит молча */
+.rt-stamp {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 14vw; font-weight: 800; letter-spacing: -.03em;
+  text-transform: uppercase; opacity: 0; pointer-events: none;
+}
+.rt-stamp.rt-on { animation: rt-slam .4s cubic-bezier(.2,1.4,.35,1) forwards; }
+@keyframes rt-slam {
+  0%   { opacity: 0; transform: scale(2.1) rotate(-11deg); }
+  55%  { opacity: 1; transform: scale(1) rotate(-7deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-7deg); }
+}
+
+.rt-empty {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center; text-align: center;
+  padding: 28px; font-size: 14px; opacity: .6;
+}
+
+/* Шкала */
+.rt-ramp { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-top: 10px; }
+.rt-tier {
+  position: relative; overflow: hidden; cursor: pointer;
+  padding: 14px 2px 12px; border: 0; border-radius: 11px;
+  background: rgba(255,255,255,.07); color: inherit;
+  font: inherit; font-size: 12.5px; font-weight: 700; text-transform: uppercase;
+}
+.rt-tier::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--c);
+}
+.rt-tier:active:not(:disabled) { background: var(--c); }
+.rt-tier:disabled { opacity: .35; }
+
+.rt-skip {
+  width: 100%; margin-top: 10px; padding: 12px 0;
+  border: 0; background: transparent; color: inherit;
+  opacity: .55; font: inherit; font-size: 14px; cursor: pointer;
+}
+
+/* Жалоба */
+.rt-sheet {
+  margin-top: 14px; padding: 16px;
+  border-radius: 15px; background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.1);
+}
+.rt-reasons { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.rt-reason {
+  padding: 12px 14px; text-align: left; cursor: pointer;
+  border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
+  background: transparent; color: inherit; font: inherit; font-size: 14px;
+}
+.rt-reason.on { border-color: #C8305A; background: rgba(200,48,90,.12); }
+
+.rt-toast {
+  position: fixed; left: 50%; bottom: 90px; z-index: 900;
+  transform: translateX(-50%); max-width: 84vw;
+  padding: 10px 16px; border-radius: 999px; font-size: 14px;
+  background: #262936; border: 1px solid rgba(255,255,255,.14);
+}
+.rt-toast[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rt-card, .rt-card.rt-out, .rt-stamp.rt-on { animation-duration: .01ms !important; }
+  .rt-stamp.rt-on { opacity: 1; transform: rotate(-7deg); }
+}
