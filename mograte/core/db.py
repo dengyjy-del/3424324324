@@ -170,10 +170,9 @@ class _Backend:
 
 
 class _Sqlite(_Backend):
-    def __init__(self, path: str, borrowed=None) -> None:
+    def __init__(self, path: str) -> None:
         self._path = path
-        self._db = borrowed
-        self._own = borrowed is None
+        self._db = None
 
     def _fix(self, sql: str) -> str:
         return sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
@@ -181,19 +180,17 @@ class _Sqlite(_Backend):
     async def connect(self) -> None:
         import aiosqlite
 
-        if self._own:
-            self._db = await aiosqlite.connect(self._path)
-            self._db.row_factory = aiosqlite.Row
-            await self._db.execute("PRAGMA journal_mode=WAL")
+        self._db = await aiosqlite.connect(self._path)
+        self._db.row_factory = aiosqlite.Row
+        await self._db.execute("PRAGMA journal_mode=WAL")
         for stmt in SCHEMA:
             await self._db.execute(self._fix(stmt))
         await self._db.commit()
 
     async def close(self) -> None:
-        # Чужое соединение закрывает тот, кто его открыл.
-        if self._db is not None and self._own:
+        if self._db is not None:
             await self._db.close()
-        self._db = None
+            self._db = None
 
     async def one(self, sql, args=()):
         async with self._db.execute(sql, tuple(args)) as cur:
@@ -224,10 +221,9 @@ class _Postgres(_Backend):
 
     _LITERAL = re.compile(r"'(?:[^']|'')*'")
 
-    def __init__(self, url: str, borrowed=None) -> None:
+    def __init__(self, url: str) -> None:
         self._url = url.replace("postgres://", "postgresql://", 1)
-        self._pool = borrowed
-        self._own = borrowed is None
+        self._pool = None
 
     @classmethod
     def _fix(cls, sql: str) -> str:
@@ -256,18 +252,17 @@ class _Postgres(_Backend):
         return sql.replace("INSERT OR IGNORE", "INSERT").replace("RANDOM()", "RANDOM()")
 
     async def connect(self) -> None:
-        if self._own:
-            import asyncpg
+        import asyncpg
 
-            self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
+        self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
         async with self._pool.acquire() as conn:
             for stmt in SCHEMA:
                 await conn.execute(stmt.replace("BLOB", "BYTEA"))
 
     async def close(self) -> None:
-        if self._pool is not None and self._own:
+        if self._pool is not None:
             await self._pool.close()
-        self._pool = None
+            self._pool = None
 
     async def one(self, sql, args=()):
         async with self._pool.acquire() as conn:
@@ -288,33 +283,6 @@ class _Postgres(_Backend):
     async def insert(self, sql, args=()):
         async with self._pool.acquire() as conn:
             return int(await conn.fetchval(self._fix(sql) + " RETURNING id", *args))
-
-
-async def attach(main_db) -> _Backend:
-    """Садится на уже открытое соединение основного бота.
-
-    Второй пул к Postgres на serverless — это лишние соединения к базе
-    и лишний повод упереться в лимит Neon. Берём тот, что уже есть.
-
-    Если объект непонятного вида, открываем своё соединение — раздел
-    продолжит работать, просто чуть дороже.
-    """
-    global _backend
-    if _backend is not None:
-        return _backend
-
-    pool = getattr(main_db, "pool", None)
-    conn = getattr(main_db, "conn", None)
-
-    if pool is not None:
-        _backend = _Postgres(config.DATABASE_URL, borrowed=pool)
-    elif conn is not None:
-        _backend = _Sqlite(config.DATABASE_URL, borrowed=conn)
-    else:
-        return await connect(config.DATABASE_URL)
-
-    await _backend.connect()
-    return _backend
 
 
 async def connect(database_url: str | None = None) -> _Backend:

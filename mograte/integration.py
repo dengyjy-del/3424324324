@@ -203,56 +203,6 @@ def mount_rate_api(app, config, bot=None) -> None:
         )
         return {"ok": True, "photo": f"/api/faces/media/{file_name}"}
 
-    @router.post("/upload-b64")
-    async def upload_b64(request: Request):
-        """Загрузка фото без multipart.
-
-        Разбор multipart зависит от библиотеки python-multipart и версии
-        starlette — если они разъехались, request.form() падает, и на
-        клиенте это выглядит как безымянная ошибка. Здесь обычный JSON:
-        ломаться нечему. Браузер присылает уже сжатый JPEG в base64.
-        """
-        import base64
-
-        body = await _json(request)
-        user, err = await _guard(request, body)
-        if err:
-            return err
-        uid = user["id"]
-        if not await db.has_consent(uid):
-            return _deny("Сначала примите условия", 403)
-
-        payload = body.get("photo") or ""
-        if "," in payload[:64]:          # срезаем префикс data:image/jpeg;base64,
-            payload = payload.split(",", 1)[1]
-        try:
-            raw = base64.b64decode(payload, validate=False)
-        except Exception:  # noqa: BLE001
-            return JSONResponse({"error": "Файл повреждён при передаче"}, status_code=400)
-
-        prof = await db.get_profile(uid)
-        if prof is None or not prof["display_name"]:
-            return JSONResponse({"error": "Сначала заполните анкету"}, status_code=400)
-
-        try:
-            name = await photos.save(raw, uid)
-        except photos.PhotoError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        except Exception as exc:  # noqa: BLE001 — иначе 500 без тела
-            log.exception("фото не сохранилось")
-            return JSONResponse(
-                {"error": f"Не удалось сохранить: {type(exc).__name__}: {exc}"[:250]},
-                status_code=500,
-            )
-
-        if prof["photo_path"]:
-            await photos.remove(prof["photo_path"])
-        await db.upsert_profile(
-            uid, photo_path=name, photo_file_id=None, status="active",
-            needs_reupload=0, hidden_until=0,
-        )
-        return {"ok": True, "photo": f"/api/faces/media/{name}"}
-
     @router.get("/next")
     async def next_card(request: Request):
         user, err = await _guard(request)
@@ -350,11 +300,10 @@ def mount_rate_api(app, config, bot=None) -> None:
 
     @router.get("/diag")
     async def diag(request: Request):
-        """Что именно сломано, если раздел не работает.
-
-        Проверку прав здесь не делаем: наружу уходят только версии
-        библиотек и счётчики, а без этих данных чинить нечего.
-        """
+        """Что именно сломано, если раздел не работает."""
+        user, err = await _guard(request)
+        if err:
+            return err
         import sys
 
         try:

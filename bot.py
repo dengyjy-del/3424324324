@@ -93,11 +93,12 @@ async def run(config: Config) -> None:
     db = create_database(config.database_url)
     await db.connect()
 
-    # Таблицы раздела оценок живут в той же базе и на том же соединении.
+    # Раздел оценок держит свои таблицы в той же базе: на serverless
+    # отдельный файл не пережил бы деплой, и данные разъехались бы.
     from mograte.core import db as rate_db
     from mograte.core import seed_loader as rate_seed
 
-    await rate_db.attach(db)
+    await rate_db.connect(config.database_url)
     await rate_seed.load(verbose=True)
 
     dispatcher = Dispatcher()
@@ -116,8 +117,8 @@ async def run(config: Config) -> None:
         observer.middleware(throttle)
         observer.middleware(subscription)
 
-    # Раздел оценок: его роутеры идут ПЕРЕД основным, иначе фото и текст
-    # перехватят обработчики отчётов и кода режима съёмки.
+    # Раздел оценок: свои роутеры идут ПЕРЕД основным, иначе фото
+    # и текст перехватят обработчики отчётов и кода режима съёмки.
     from mograte.integration import attach_rate
 
     attach_rate(dispatcher, config, bot)

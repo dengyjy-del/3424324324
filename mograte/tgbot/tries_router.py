@@ -9,11 +9,6 @@
 человеку. Обе надбавки складываются и сгорают в полночь вместе со
 сбросом суточного счётчика.
 
-Начисление идёт в ту же таблицу purchases, куда попадают попытки,
-купленные за XP: основной бот уже умеет их считать через
-count_purchases("scan:<дата>:"). Поэтому его код менять не нужно —
-и, соответственно, нечему ломаться на Vercel.
-
 Про юзернеймы: Telegram не даёт ботам искать людей по @нику. Поэтому
 ник запоминается в момент, когда человек пишет боту, — и команда
 работает только для тех, кто уже заходил. Для остальных остаётся ID.
@@ -57,31 +52,21 @@ def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def scan_key(day: str | None = None) -> str:
-    """Префикс, по которому основной бот считает докупленные попытки."""
-    return f"scan:{day or _today()}:"
+def setting_key(user_id: int, day: str | None = None) -> str:
+    """Ключ надбавки. Тот же стиль, что у gift_scans:<дата>."""
+    return f"tries:{user_id}:{day or _today()}"
 
 
 async def granted_for(db, user_id: int) -> int:
-    """Сколько попыток уже есть у человека на сегодня."""
+    """Сколько попыток выдано этому человеку на сегодня."""
     try:
-        return int(await db.count_purchases(user_id, scan_key()))
-    except Exception:  # noqa: BLE001 — подсчёт не должен ронять команду
+        raw = await db.get_setting(setting_key(user_id))
+    except Exception:  # noqa: BLE001 — настройки не должны ронять выдачу лимита
         return 0
-
-
-async def grant(db, user_id: int, amount: int) -> int:
-    """Начисляет попытки. Возвращает, сколько реально добавилось.
-
-    Записи идут с ценой 0: это подарок, а не покупка за XP,
-    и баланс он трогать не должен.
-    """
-    have = await granted_for(db, user_id)
-    added = 0
-    for i in range(have + 1, have + amount + 1):
-        if await db.purchase(user_id, f"{scan_key()}{i}", 0):
-            added += 1
-    return added
+    try:
+        return max(0, int(raw)) if raw else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 @router.message(Command("tries"))
@@ -108,45 +93,29 @@ async def cmd_tries(message: Message, db, config) -> None:
         await message.answer(USAGE)
         return
 
-    if db is None:
-        await message.answer(
-            "Нет подключения к базе основного бота — начислять некуда.\n"
-            "Проверь DATABASE_URL в .env."
-        )
-        return
-
     target_id = await _resolve(target_raw)
     if target_id is None:
         await message.answer(UNKNOWN_NICK if not target_raw.lstrip("-").isdigit() else USAGE)
         return
 
-    # Человек мог ни разу не заходить — тогда строки в users нет,
-    # и начисление повисло бы в воздухе.
+    await db.set_setting(setting_key(target_id), str(amount))
+
+    # Человек мог ни разу не открывать раздел — тогда строки в users нет,
+    # и лимит считался бы от пустого места.
     try:
         await db.ensure_user(target_id)
     except Exception:  # noqa: BLE001 — не критично для самой выдачи
         pass
 
     who = f"@{target_raw.lstrip('@')}" if not target_raw.lstrip("-").isdigit() else str(target_id)
-
     if amount == 0:
-        have = await granted_for(db, target_id)
+        await message.answer(f"Снял выданные попытки у {who} (<code>{target_id}</code>).")
+    else:
         await message.answer(
-            f"Сейчас у {who} (<code>{target_id}</code>) начислено "
-            f"{have} {_plural(have)} на сегодня.\n\n"
-            "<i>Снять начисленное командой нельзя — записи о попытках "
-            "общие с покупками за XP. Они сгорят сами в полночь UTC.</i>"
+            f"Выдал <b>{amount}</b> {_plural(amount)} для {who} "
+            f"(<code>{target_id}</code>).\n\n"
+            "Сгорят в полночь UTC. Складываются с подарком из /gift."
         )
-        return
-
-    added = await grant(db, target_id, amount)
-    total = await granted_for(db, target_id)
-    await message.answer(
-        f"Начислил <b>{added}</b> {_plural(added)} для {who} "
-        f"(<code>{target_id}</code>).\n"
-        f"Всего сверх лимита на сегодня: {total}.\n\n"
-        "Сгорят в полночь UTC. Складываются с подарком из /gift."
-    )
 
     # Уведомляем адресата, если бот ему писать может.
     if amount > 0:
