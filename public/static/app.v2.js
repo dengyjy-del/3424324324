@@ -1494,6 +1494,14 @@ async function sendReport(reason) {
 
 /* ── Профиль ─────────────────────────────────────────────── */
 
+function safePaint(draw) {
+  try {
+    draw();
+  } catch (error) {
+    console.error("Не отрисовался блок профиля", error);
+  }
+}
+
 function paintStats(stats, user) {
   if (user) {
     $("pf-name").textContent = user.name || "—";
@@ -1511,7 +1519,6 @@ function paintStats(stats, user) {
   }
 
   $("pf-best").textContent = stats.best.toFixed(1);
-  $("pf-avg").textContent = stats.average.toFixed(1);
   $("pf-count").textContent = stats.count;
   $("pf-tier").textContent = `Последний отчёт: ${stats.last.toFixed(1)}`;
 }
@@ -1519,8 +1526,10 @@ function paintStats(stats, user) {
 async function loadProfile() {
   try {
     const data = await api("/api/profile");
-    paintStats(data.stats, data.user);
-    paintDuo(data.stats, data.peer);
+    // Каждый блок рисуется отдельно: сбой в одном не должен гасить экран
+    // целиком — раньше одна опечатка оставляла пользователя перед пустотой.
+    safePaint(() => paintStats(data.stats, data.user));
+    safePaint(() => paintDuo(data.stats, data.peer));
     await loadHistory(state.period);
   } catch (error) {
     toast(error.message);
@@ -1542,7 +1551,8 @@ function paintDuo(stats, peer) {
 
   if (stats && stats.count) {
     $("pf-scan-value").textContent = stats.last.toFixed(1);
-    $("pf-scan-note").textContent = `последний из ${stats.count}`;
+    $("pf-scan-note").textContent =
+      `средний ${stats.average.toFixed(1)} · ${stats.count} отчётов`;
     scanBox.classList.add("filled");
   } else {
     $("pf-scan-value").textContent = "—";
