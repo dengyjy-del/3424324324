@@ -144,21 +144,97 @@
       if (!file || busy) return;
       busy = true;
       const btn = document.getElementById("rt-up");
+      const err = document.getElementById("rt-err");
       btn.disabled = true;
-      btn.textContent = "Загружаем…";
-      const fd = new FormData();
-      fd.append("photo", file);
-      const r = await api("/upload", { method: "POST", body: fd });
+      btn.textContent = "Готовим фото…";
+      err.textContent = "";
+
+      let r;
+      try {
+        /* Сжимаем в браузере: снимок с телефона на 5 МБ ужимается до
+           двух-трёх сотен килобайт. Заодно решается HEIC с айфона —
+           браузер его открывает сам, а на сервер уходит обычный JPEG. */
+        const b64 = await shrink(file);
+        btn.textContent = "Загружаем…";
+        r = await api("/upload-b64", { method: "POST", json: { photo: b64 } });
+      } catch (e) {
+        /* Canvas не справился — отправляем файл как есть, старым способом. */
+        btn.textContent = "Загружаем…";
+        const fd = new FormData();
+        fd.append("photo", file);
+        r = await api("/upload", { method: "POST", body: fd });
+      }
+
       busy = false;
       btn.disabled = false;
       btn.textContent = "Загрузить и начать";
+
       if (!r.ok) {
-        document.getElementById("rt-err").textContent =
-          r.data.error || "Не удалось загрузить (код " + r.status + ")";
+        showUploadError(r);
         return;
       }
       haptic("ok");
       await refresh();
+    };
+  }
+
+  /* Ужимает картинку до 1280 px по длинной стороне и отдаёт base64. */
+  async function shrink(file) {
+    const MAX = 1280;
+    let bmp;
+    if (window.createImageBitmap) {
+      try {
+        // from-image разворачивает снимок по метаданным ориентации,
+        // иначе портретное фото с телефона ляжет набок.
+        bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch (e) {
+        bmp = await createImageBitmap(file);
+      }
+    } else {
+      bmp = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = rej;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    const w = bmp.width, h = bmp.height;
+    const k = Math.min(1, MAX / Math.max(w, h));
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(w * k);
+    cv.height = Math.round(h * k);
+    cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+
+    const url = cv.toDataURL("image/jpeg", 0.88);
+    if (!url || url.length < 100) throw new Error("canvas пуст");
+    return url;
+  }
+
+  /* Показываем настоящую причину, а не «что-то пошло не так». */
+  function showUploadError(r) {
+    haptic("error");
+    const err = document.getElementById("rt-err");
+    const text = (r.data && r.data.error) || "Не удалось загрузить";
+    err.textContent = r.status ? text + " (код " + r.status + ")" : text;
+
+    let btn = document.getElementById("rt-why");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "rt-why";
+      btn.className = "rt-btn rt-ghost";
+      btn.textContent = "Показать подробности";
+      err.parentNode.insertBefore(btn, err.nextSibling);
+    }
+    btn.onclick = async () => {
+      btn.textContent = "Собираем…";
+      const d = await api("/diag");
+      const box = document.createElement("pre");
+      box.className = "rt-diag";
+      box.textContent = d.ok
+        ? JSON.stringify(d.data, null, 1)
+        : "Диагностика недоступна: код " + d.status;
+      btn.replaceWith(box);
     };
   }
 

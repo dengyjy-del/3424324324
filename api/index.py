@@ -279,8 +279,15 @@ else:
             # остальное. Отдельный пул на serverless означал бы лишние
             # соединения к базе.
             from mograte.core import db as rate_db
+            from mograte.core import seed_loader as rate_seed
 
             await rate_db.attach(db)
+            # Демо-анкеты читаются из папки в сборке — на запись
+            # ничего не идёт, на serverless это безопасно.
+            try:
+                await rate_seed.load(verbose=False)
+            except Exception:  # noqa: BLE001 — без демо раздел всё равно работает
+                logger.warning("демо-анкеты не загрузились", exc_info=True)
             _ready = True
 
     @app.middleware("http")
