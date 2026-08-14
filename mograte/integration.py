@@ -13,7 +13,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .core import config as rate_config
 from .core import db, feed, grades, moderation, photos, texts
@@ -160,23 +160,38 @@ def mount_rate_api(app, config, bot=None) -> None:
         if not await db.has_consent(uid):
             return _deny("Сначала примите условия", 403)
 
-        form = await request.form()
+        try:
+            form = await request.form()
+        except Exception as exc:  # noqa: BLE001 — чаще всего нет python-multipart
+            log.exception("не разобрана форма загрузки")
+            return JSONResponse(
+                {"error": f"Сервер не смог разобрать файл: {type(exc).__name__}"},
+                status_code=400,
+            )
+
         item = form.get("photo")
         if item is None:
             return JSONResponse({"error": "Файл не получен"}, status_code=400)
         raw = await item.read() if hasattr(item, "read") else bytes(item)
 
-        try:
-            file_name = photos.save_bytes(raw, uid)
-        except photos.PhotoError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-
         prof = await db.get_profile(uid)
         if prof is None or not prof["display_name"]:
-            photos.remove(file_name)
             return JSONResponse({"error": "Сначала заполните анкету"}, status_code=400)
+
+        try:
+            file_name = await photos.save(raw, uid)
+        except photos.PhotoError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:  # noqa: BLE001 — иначе 500 без тела и общее
+            # «Не удалось загрузить» вместо настоящей причины
+            log.exception("фото не сохранилось")
+            return JSONResponse(
+                {"error": f"Не удалось сохранить фото: {type(exc).__name__}"},
+                status_code=500,
+            )
+
         if prof["photo_path"]:
-            photos.remove(prof["photo_path"])
+            await photos.remove(prof["photo_path"])
 
         await db.upsert_profile(
             uid,
@@ -263,19 +278,57 @@ def mount_rate_api(app, config, bot=None) -> None:
 
     @router.get("/media/{name}")
     async def media(name: str):
-        path = photos.path_for(name)
-        if not path.exists():
+        data = await photos.load(name)
+        if data is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        return FileResponse(path)
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @router.get("/seed/{name}")
     async def seed(name: str):
-        from pathlib import Path
-
-        path = rate_config.SEED_DIR / Path(name).name
-        if not path.exists():
+        data = photos.read_seed(name)
+        if data is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        return FileResponse(path)
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @router.get("/diag")
+    async def diag(request: Request):
+        """Что именно сломано, если раздел не работает."""
+        user, err = await _guard(request)
+        if err:
+            return err
+        import sys
+
+        try:
+            import PIL
+
+            pil = getattr(PIL, "__version__", "есть")
+        except Exception:  # noqa: BLE001
+            pil = "НЕ УСТАНОВЛЕН"
+        try:
+            import multipart  # noqa: F401
+
+            mp = "есть"
+        except Exception:  # noqa: BLE001
+            mp = "НЕ УСТАНОВЛЕН — загрузка файлов работать не будет"
+        return {
+            "python": sys.version.split()[0],
+            "pillow": pil,
+            "python_multipart": mp,
+            "heic": photos._HEIF_OK,
+            "storage": "база (фото не пишутся на диск)",
+            "seed_dir": str(rate_config.SEED_DIR),
+            "seed_dir_exists": rate_config.SEED_DIR.exists(),
+            "photos_bytes": await db.photos_bytes_total(),
+            "stats": await db.global_stats(),
+        }
 
     app.include_router(router)
     log.info("Раздел оценок: /api/faces/* подключён (%s)",
@@ -297,8 +350,17 @@ def attach_rate(dispatcher, config, bot=None) -> None:
     from .tgbot.admin_router import router as admin_router
     from .tgbot.demo_router import router as demo_router
     from .tgbot.rating_router import router as rating_router
+    from .tgbot.tries_router import RememberUsername
+    from .tgbot.tries_router import router as tries_router
+
+    # Ник запоминается со всех сообщений: Telegram не даёт искать людей
+    # по @нику, поэтому без этого /tries @ник работать не сможет.
+    remember = RememberUsername()
+    for observer in (dispatcher.message, dispatcher.callback_query):
+        observer.middleware(remember)
 
     dispatcher.include_router(demo_router)
+    dispatcher.include_router(tries_router)
     dispatcher.include_router(rating_router)
     dispatcher.include_router(admin_router)
     log.info("Раздел оценок: роутеры бота подключены")

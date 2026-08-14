@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import BufferedInputFile
 
 from ..core import config, db, moderation, photos
 from . import keyboards as kb
@@ -51,14 +51,19 @@ async def _send_one(bot: Bot, chat_id: int, text: str, markup, snap: dict) -> No
         except Exception:  # noqa: BLE001
             log.warning("file_id не сработал для админа, пробую файл с диска")
 
-    path = None
+    data = None
     if snap.get("kind") == "live" and snap.get("photo_path"):
-        path = photos.path_for(snap["photo_path"])
+        data = await photos.load(snap["photo_path"])
     elif snap.get("kind") == "seed" and snap.get("file_name"):
-        path = config.SEED_DIR / snap["file_name"]
+        data = photos.read_seed(snap["file_name"])
 
-    if path and path.exists():
-        await bot.send_photo(chat_id, FSInputFile(path), caption=text, reply_markup=markup)
+    if data:
+        await bot.send_photo(
+            chat_id,
+            BufferedInputFile(data, filename="report.jpg"),
+            caption=text,
+            reply_markup=markup,
+        )
         return
 
     await bot.send_message(chat_id, text + "\n\n<i>Фото недоступно.</i>", reply_markup=markup)

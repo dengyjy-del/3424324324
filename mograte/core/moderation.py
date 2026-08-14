@@ -127,7 +127,7 @@ async def _apply_to_live(
         return ActionResult(False, f"Анкета уже {already} — решение принято ранее.")
 
     if action == "delete":
-        photos.remove(prof["photo_path"])
+        await photos.remove(prof["photo_path"])
         await db.delete_profile(user_id)
         await db.resolve_reports_for("live", user_id, admin_id, "delete")
         await db.log_action(admin_id, "live", user_id, "delete", f"report#{report_id}")
@@ -160,7 +160,7 @@ async def _apply_to_live(
         )
 
     if action == "ban":
-        photos.remove(prof["photo_path"])
+        await photos.remove(prof["photo_path"])
         await db.delete_profile(user_id)
         await db.set_status(user_id, "banned")
         await db.resolve_reports_for("live", user_id, admin_id, "ban")

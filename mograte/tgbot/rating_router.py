@@ -168,7 +168,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     photo = message.photo[-1]
     try:
         raw = await _download(bot, photo.file_id)
-        file_name = photos.save_bytes(raw, message.from_user.id)
+        file_name = await photos.save(raw, message.from_user.id)
     except photos.PhotoError as exc:
         await message.answer(str(exc))
         return
@@ -181,7 +181,7 @@ async def reg_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     prof = await db.get_profile(message.from_user.id)
 
     if prof and prof["photo_path"]:
-        photos.remove(prof["photo_path"])
+        await photos.remove(prof["photo_path"])
 
     if current == Reg.edit_photo.state or prof:
         await db.upsert_profile(
@@ -252,16 +252,18 @@ async def send_next_card(message: Message, user_id: int) -> None:
         except Exception:  # noqa: BLE001 — file_id мог протухнуть
             log.warning("file_id не сработал, отправляю файл с диска")
 
-    path = (
-        photos.path_for(card.photo_path)
+    data = (
+        await photos.load(card.photo_path)
         if card.kind == "live"
-        else config.SEED_DIR / card.photo_path
+        else photos.read_seed(card.photo_path)
     )
-    if not path.exists():
-        log.error("файл анкеты не найден: %s", path)
+    if data is None:
+        log.error("фото анкеты не найдено: %s/%s", card.kind, card.target_id)
         await send_next_card(message, user_id)
         return
-    await message.answer_photo(FSInputFile(path), caption=caption, reply_markup=markup)
+    await message.answer_photo(
+        BufferedInputFile(data, filename="p.jpg"), caption=caption, reply_markup=markup
+    )
 
 
 @router.callback_query(F.data.startswith("rate:v:"))
@@ -447,7 +449,7 @@ async def on_delete_ask(call: CallbackQuery) -> None:
 async def on_delete_yes(call: CallbackQuery) -> None:
     prof = await db.get_profile(call.from_user.id)
     if prof:
-        photos.remove(prof["photo_path"])
+        await photos.remove(prof["photo_path"])
     await db.delete_profile(call.from_user.id)
     await call.message.edit_reply_markup(reply_markup=None)
     await call.answer("Анкета удалена")

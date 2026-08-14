@@ -100,6 +100,13 @@ try:
         )
 
     db = create_database(config.database_url)
+
+    # Раздел оценок держит таблицы в той же базе.
+
+    from mograte.core import db as rate_db
+
+
+    await rate_db.connect(config.database_url)
     demo = DemoState(db, config.demo_ttl_minutes)
     gate = SubscriptionGate(*config.gate_sources)
 
@@ -162,6 +169,12 @@ try:
     for _observer in (dispatcher.message, dispatcher.callback_query):
         _observer.middleware(_throttle)
         _observer.middleware(_subscription)
+
+    # Раздел оценок: свои роутеры идут ПЕРЕД основным, иначе фото и текст
+    # перехватят обработчики отчётов и кода режима съёмки.
+    from mograte.integration import attach_rate
+
+    attach_rate(dispatcher, config, bot)
 
     dispatcher.include_router(handlers.router)
 

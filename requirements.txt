@@ -5,4 +5,6 @@ python-multipart>=0.0.12
 asyncpg>=0.30
 aiosqlite>=0.20.0
 python-dotenv>=1.0.1
-Pillow
+Pillow>=10.0
+# Нужен только если хотите принимать HEIC с айфона напрямую:
+# pillow-heif>=0.16
