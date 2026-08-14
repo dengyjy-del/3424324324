@@ -36,6 +36,8 @@ class Config:
     demo_code: str
     demo_ttl_minutes: float
     admin_ids: tuple[int, ...]
+    peer_ids: tuple[int, ...]
+    peer_open: bool
 
     # мини-апп
     webhook_secret: str      # заголовок, которым Telegram подписывает вебхук
@@ -93,6 +95,13 @@ class Config:
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
+
+    def peer_allowed(self, user_id: int) -> bool:
+        """
+        Кому виден ChadMatch. Отдельно от админских прав: тестировщику нужен
+        доступ к разделу, а не к модерации, режиму съёмки и разметке.
+        """
+        return self.peer_open or self.is_admin(user_id) or user_id in self.peer_ids
 
     def demo_allowed_for(self, user_id: int) -> bool:
         """
@@ -307,6 +316,8 @@ def load_config() -> Config:
         demo_code=demo_code,
         demo_ttl_minutes=_get_float("DEMO_TTL_MINUTES", 30.0),
         admin_ids=_get_ids("ADMIN_IDS"),
+        peer_ids=_get_ids("PEER_IDS"),
+        peer_open=(os.getenv("PEER_OPEN") or "").strip().lower() in ("1", "true", "yes"),
         webhook_secret=(os.getenv("WEBHOOK_SECRET") or "").strip(),
         setup_key=(os.getenv("SETUP_KEY") or "").strip(),
         webapp_url=_webapp_url(),

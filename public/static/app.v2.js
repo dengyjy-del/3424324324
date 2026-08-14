@@ -111,7 +111,7 @@ function initTabs() {
       buttons.forEach((b) => b.classList.toggle("active", b === button));
       movePill(pill, button, tabs);
       showScreen(button.dataset.screen);
-      if (button.dataset.screen === "s-today") loadToday();
+      if (button.dataset.screen === "s-profile") loadProfile();
       if (button.dataset.screen === "s-friends") loadFriends();
       if (button.dataset.screen === "s-peer") loadPeer();
       if (button.dataset.screen === "s-profile") {
@@ -499,7 +499,7 @@ function showBlocked() {
 }
 
 function enterApp() {
-  showScreen("s-today");
+  showScreen("s-profile");
   initTabs();
   loadToday();
 }
@@ -1243,6 +1243,7 @@ async function loadPeer() {
   }
 
   peerState.cfg = state;
+  loadSeedBox();
   $("pr-consent-text").textContent = state.consent_text;
   $("pr-agree-label").textContent =
     `Мне есть ${state.min_age}, на фото я, и я согласен с правилами`;
@@ -1354,7 +1355,48 @@ async function votePeer(tier) {
   else loadDeck();
 }
 
+async function loadSeedBox() {
+  // Блок наполнения — только для владельца; у остальных 403, и это норма
+  try {
+    const diag = await api("/api/peer/diag");
+    $("pr-seed").classList.remove("hidden");
+    const folder = diag.folder.found
+      ? `${diag.folder.files.length} в папке`
+      : "папка не видна функции";
+    $("pr-seed-note").textContent =
+      `В пуле: ${diag.pool_in_db} · ${folder}. ` +
+      "Снимки показываются как обычные анкеты, пока живых мало.";
+  } catch (_) {
+    $("pr-seed").classList.add("hidden");
+  }
+}
+
 function initPeer() {
+  $("pr-seed-pick").addEventListener("click", () => $("pr-seed-files").click());
+
+  $("pr-seed-files").addEventListener("change", async (event) => {
+    const files = [...event.target.files];
+    event.target.value = "";
+    if (!files.length) return;
+
+    let added = 0;
+    for (const file of files) {
+      try {
+        const body = new FormData();
+        body.append("photo", await shrinkPhoto(file), "s.jpg");
+        // Имя файла вида «Дима_21.jpg» задаёт имя и возраст карточки
+        body.append("title", file.name);
+        const result = await api("/api/peer/seed", { method: "POST", body });
+        if (result.added) added += 1;
+      } catch (_) {}
+    }
+
+    notifySuccess();
+    toast(`Добавлено снимков: ${added} из ${files.length}`);
+    loadSeedBox();
+    loadDeck();
+  });
+
   $("pr-agree").addEventListener("change", (event) => {
     $("pr-accept").disabled = !event.target.checked;
   });
@@ -1478,10 +1520,53 @@ async function loadProfile() {
   try {
     const data = await api("/api/profile");
     paintStats(data.stats, data.user);
+    paintDuo(data.stats, data.peer);
     await loadHistory(state.period);
   } catch (error) {
     toast(error.message);
   }
+
+  // Режим дня переехал сюда же: серия, привычки, XP и достижения
+  loadToday();
+}
+
+/**
+ * Две колонки оценок: алгоритм и живые люди.
+ *
+ * Стоят рядом намеренно — это два ответа на один и тот же вопрос, и
+ * расхождение между ними само по себе информативно.
+ */
+function paintDuo(stats, peer) {
+  const scanBox = $("pf-scan-value").closest(".duo-card");
+  const peerBox = $("pf-peer-value").closest(".duo-card");
+
+  if (stats && stats.count) {
+    $("pf-scan-value").textContent = stats.last.toFixed(1);
+    $("pf-scan-note").textContent = `последний из ${stats.count}`;
+    scanBox.classList.add("filled");
+  } else {
+    $("pf-scan-value").textContent = "—";
+    $("pf-scan-note").textContent = "нет отчётов";
+    scanBox.classList.remove("filled");
+  }
+
+  if (peer && peer.votes >= 3) {
+    $("pf-peer-value").textContent = peer.average.toFixed(1);
+    $("pf-peer-note").textContent = `${peer.tier} · ${peer.votes} оценок`;
+    peerBox.classList.add("filled");
+  } else if (peer && peer.has_profile) {
+    $("pf-peer-value").textContent = "—";
+    $("pf-peer-note").textContent = `${peer.votes} из 3 оценок`;
+    peerBox.classList.remove("filled");
+  } else {
+    $("pf-peer-value").textContent = "—";
+    $("pf-peer-note").textContent = peer && peer.available
+      ? "анкеты нет"
+      : "скоро";
+    peerBox.classList.remove("filled");
+  }
+
+  $("pf-rated").textContent = (peer && peer.rated) || 0;
 }
 
 async function loadHistory(period) {

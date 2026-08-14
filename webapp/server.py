@@ -80,6 +80,14 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/h
 SEED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
 
+def _filler_identity(key: str, name: str | None, age: int | None):
+    """Явно заданные имя и возраст, иначе выведенные из ключа."""
+    if name and age:
+        return name, age
+    parsed = peer.parse_identity(key)
+    return parsed if parsed else peer.filler_identity(key)
+
+
 def seed_files() -> list[str]:
     """Снимки из папки репозитория. Пустой список — не ошибка, а вариант."""
     folder = _seed_dir()
@@ -454,9 +462,31 @@ def create_app(
     @app.get("/api/profile")
     async def profile(user: TelegramUser = Depends(current_user)) -> dict:
         stats = await db.get_stats(user.id)
+
+        # Показатели ChadMatch идут рядом со сканами: это два ответа на один
+        # вопрос, и пользователю интереснее видеть их вместе.
+        available = config.peer_allowed(user.id)
+        peer_block = {"available": available, "has_profile": False, "votes": 0, "rated": 0}
+
+        if available:
+            own = await db.peer_profile(user.id)
+            result = await db.peer_result(f"u:{user.id}")
+            peer_block.update(
+                has_profile=bool(own and own.get("photo_key")),
+                votes=result["count"],
+                average=result["average"],
+                tier=(
+                    peer.tier_for_score(result["average"]).title
+                    if result["count"] >= 3
+                    else None
+                ),
+                rated=len(await db.peer_seen(user.id)),
+            )
+
         return {
             "user": {"name": user.display_name, "photo": user.photo_url},
             "stats": _stats_payload(stats),
+            "peer": peer_block,
         }
 
     @app.get("/api/history")
@@ -685,9 +715,11 @@ def create_app(
     # ═══════════════════ РЕЖИМ ВЗАИМНЫХ ОЦЕНОК ════════════════════════
 
     async def _peer_require_admin(user_id: int) -> None:
-        # Раздел пока закрыт: включается снятием этой проверки, когда
-        # владелец решит открыть его всем.
-        if not config.is_admin(user_id):
+        """
+        Доступ к разделу. Открывается тремя способами: владельцу, списку
+        тестировщиков из PEER_IDS и всем сразу через PEER_OPEN=1.
+        """
+        if not config.peer_allowed(user_id):
             raise HTTPException(status_code=403, detail="Раздел пока закрыт")
 
     async def _peer_state(user_id: int) -> dict:
@@ -833,29 +865,38 @@ def create_app(
         if len(cards) < 6:
             seen = await db.peer_seen(user.id)
 
-            # Снимки из базы: добавлены владельцем через бота
-            for key in await db.peer_seed_keys():
-                target = f"pool:{key}"
+            # Снимки наполнения показываются как обычные анкеты: с именем
+            # и возрастом. Служебная карточка без подписи оценивается иначе,
+            # а нам нужно, чтобы наполнение было неотличимо от живых.
+            for row in await db.peer_seed_list():
+                target = f"pool:{row['key']}"
                 if target in seen:
                     continue
+                name, age = _filler_identity(row["key"], row.get("name"), row.get("age"))
                 cards.append(
                     {
                         "target": target,
-                        "name": "",
-                        "age": 0,
-                        "photo": f"/api/peer/seed/{key}",
+                        "name": name,
+                        "age": age,
+                        "photo": f"/api/peer/seed/{row['key']}",
                     }
                 )
                 if len(cards) >= 12:
                     break
 
             # Снимки из папки репозитория
-            for name in seed_files():
-                target = f"seed:{name}"
+            for file_name in seed_files():
+                target = f"seed:{file_name}"
                 if target in seen or len(cards) >= 12:
                     continue
+                name, age = _filler_identity(file_name, None, None)
                 cards.append(
-                    {"target": target, "name": "", "age": 0, "photo": f"/seed/{name}"}
+                    {
+                        "target": target,
+                        "name": name,
+                        "age": age,
+                        "photo": f"/seed/{file_name}",
+                    }
                 )
 
         return {"cards": cards, "votes_left": peer.DAILY_VOTE_LIMIT - used}
@@ -895,13 +936,41 @@ def create_app(
             headers={"Cache-Control": "private, max-age=600"},
         )
 
+    @app.post("/api/peer/seed")
+    async def peer_seed_upload(
+        photo: UploadFile = File(...),
+        title: str = Form(default=""),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        """
+        Пополнение пула прямо из приложения. Самый надёжный путь: не зависит
+        от того, попала ли папка репозитория внутрь serverless-функции.
+        """
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+        if photo.content_type not in ALLOWED_TYPES:
+            raise HTTPException(status_code=415, detail="Нужен JPEG, PNG или WebP")
+
+        payload = await photo.read(MAX_PEER_PHOTO_BYTES + 1)
+        if len(payload) > MAX_PEER_PHOTO_BYTES:
+            raise HTTPException(status_code=413, detail="Фото слишком тяжёлое")
+
+        key = hashlib.sha256(payload).hexdigest()[:32]
+        parsed = peer.parse_identity(title or photo.filename or "")
+        name, age = parsed if parsed else (None, None)
+
+        added = await db.peer_seed_add(key, payload, user.id, name, age)
+        pool = await db.peer_seed_list()
+        return {"ok": True, "added": added, "total": len(pool)}
+
     @app.get("/api/peer/diag")
     async def peer_diag(user: TelegramUser = Depends(current_user)) -> dict:
         """Что видно серверу: папка, пул в базе, число анкет."""
-        await _peer_require_admin(user.id)
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
         return {
             "folder": seed_diagnostics(),
-            "pool_in_db": len(await db.peer_seed_keys()),
+            "pool_in_db": len(await db.peer_seed_list()),
             "stats": await db.peer_stats(),
         }
 

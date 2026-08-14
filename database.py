@@ -222,10 +222,14 @@ class BaseDatabase(ABC):
     async def peer_close_report(self, report_id: int, status: str) -> None: ...
 
     @abstractmethod
-    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool: ...
+    async def peer_seed_add(
+        self, key: str, photo: bytes, added_by: int,
+        name: str | None = None, age: int | None = None,
+    ) -> bool: ...
 
     @abstractmethod
-    async def peer_seed_keys(self) -> list[str]: ...
+    async def peer_seed_list(self) -> list[dict]:
+        """Снимки наполнения: ключ, имя и возраст (без самих байтов)."""
 
     @abstractmethod
     async def peer_seed_photo(self, key: str) -> bytes | None: ...
@@ -384,6 +388,8 @@ CREATE TABLE IF NOT EXISTS peer_reports (
 CREATE TABLE IF NOT EXISTS peer_seed (
     key        TEXT PRIMARY KEY,
     photo      BLOB NOT NULL,
+    name       TEXT,
+    age        INTEGER,
     added_by   INTEGER,
     created_at TEXT NOT NULL
 );
@@ -958,22 +964,26 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
 
-    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool:
+    async def peer_seed_add(
+        self, key: str, photo: bytes, added_by: int,
+        name: str | None = None, age: int | None = None,
+    ) -> bool:
         cursor = await self.conn.execute(
             """
-            INSERT OR IGNORE INTO peer_seed (key, photo, added_by, created_at)
-                 VALUES (?, ?, ?, ?)
+            INSERT OR IGNORE INTO peer_seed
+                   (key, photo, name, age, added_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (key, photo, added_by, _now_iso()),
+            (key, photo, name, age, added_by, _now_iso()),
         )
         await self.conn.commit()
         return cursor.rowcount > 0
 
-    async def peer_seed_keys(self) -> list[str]:
+    async def peer_seed_list(self) -> list[dict]:
         async with self.conn.execute(
-            "SELECT key FROM peer_seed ORDER BY created_at"
+            "SELECT key, name, age FROM peer_seed ORDER BY created_at"
         ) as cursor:
-            return [r["key"] for r in await cursor.fetchall()]
+            return [dict(r) for r in await cursor.fetchall()]
 
     async def peer_seed_photo(self, key: str) -> bytes | None:
         async with self.conn.execute(
@@ -1251,6 +1261,8 @@ CREATE TABLE IF NOT EXISTS peer_reports (
 CREATE TABLE IF NOT EXISTS peer_seed (
     key        TEXT PRIMARY KEY,
     photo      BYTEA NOT NULL,
+    name       TEXT,
+    age        INTEGER,
     added_by   BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -1290,6 +1302,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by  BIGINT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS theme        TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS username     TEXT;
+ALTER TABLE peer_seed ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE peer_seed ADD COLUMN IF NOT EXISTS age  INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(LOWER(username));
 
@@ -1841,21 +1855,27 @@ class PostgresDatabase(BaseDatabase):
                 "UPDATE peer_reports SET status = $1 WHERE id = $2", status, report_id
             )
 
-    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool:
+    async def peer_seed_add(
+        self, key: str, photo: bytes, added_by: int,
+        name: str | None = None, age: int | None = None,
+    ) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchval(
                 """
-                INSERT INTO peer_seed (key, photo, added_by) VALUES ($1, $2, $3)
+                INSERT INTO peer_seed (key, photo, name, age, added_by)
+                     VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT DO NOTHING RETURNING key
                 """,
-                key, photo, added_by,
+                key, photo, name, age, added_by,
             )
         return row is not None
 
-    async def peer_seed_keys(self) -> list[str]:
+    async def peer_seed_list(self) -> list[dict]:
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT key FROM peer_seed ORDER BY created_at")
-        return [r["key"] for r in rows]
+            rows = await conn.fetch(
+                "SELECT key, name, age FROM peer_seed ORDER BY created_at"
+            )
+        return [dict(r) for r in rows]
 
     async def peer_seed_photo(self, key: str) -> bytes | None:
         async with self.pool.acquire() as conn:

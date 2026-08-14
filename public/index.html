@@ -108,63 +108,6 @@
   </section>
 
   <!-- ══════════════ СЕГОДНЯ ══════════════ -->
-  <section class="screen" id="s-today">
-    <header style="margin-bottom:16px">
-      <p class="eyebrow">Ежедневный режим</p>
-      <h1 style="margin-top:6px">Сегодня</h1>
-    </header>
-
-    <div class="glass streak-card">
-      <div class="streak-flame" id="td-flame">🔥</div>
-      <div>
-        <div class="numeral streak-num" id="td-streak">0</div>
-        <div class="streak-label" id="td-streak-label">дней подряд</div>
-      </div>
-      <div class="streak-side">
-        <div class="tiny">Лучшая серия</div>
-        <div class="numeral" id="td-best" style="font-size:19px">0</div>
-      </div>
-    </div>
-
-    <div class="glass pad" style="margin-top:10px">
-      <div class="rank-row">
-        <span class="rank-emoji" id="td-rank-emoji">🌱</span>
-        <div style="flex:1;min-width:0">
-          <h2 id="td-rank-title">Старт</h2>
-          <p class="tiny" id="td-rank-caption">—</p>
-        </div>
-      </div>
-      <div class="rank-bar"><i id="td-rank-fill"></i></div>
-      <p class="tiny" id="td-rank-next" style="margin-top:7px"></p>
-    </div>
-
-    <div class="glass" style="margin-top:10px">
-      <div class="pad" style="padding-bottom:8px;display:flex;justify-content:space-between;align-items:baseline">
-        <p class="eyebrow">Привычки дня</p>
-        <span class="tiny" id="td-progress">0 / 5</span>
-      </div>
-      <div id="td-habits"></div>
-      <p class="tiny" id="td-need" style="padding:0 16px 15px"></p>
-    </div>
-
-    <div class="glass pad scan-quota" id="td-quota"></div>
-
-    <div class="glass pad scan-quota hidden" id="td-buy-scan"></div>
-
-    <div class="glass pad xp-card" id="td-xp"></div>
-
-
-    <div class="glass" style="margin-top:10px">
-      <div class="pad" style="padding-bottom:10px">
-        <p class="eyebrow">Достижения</p>
-      </div>
-      <div class="ach-strip" id="td-achievements"></div>
-    </div>
-
-    <p class="disclaimer">
-      Серия не рвётся, если пропустил один день. Два подряд — начинаем заново.
-    </p>
-  </section>
 
   <!-- ══════════════ СКАН ══════════════ -->
   <section class="screen" id="s-scan">
@@ -360,11 +303,12 @@
 
   <!-- ══════════════ ПРОФИЛЬ ══════════════ -->
   <section class="screen" id="s-profile">
-    <header style="margin-bottom:18px">
+    <header style="margin-bottom:16px">
       <p class="eyebrow">Твои показатели</p>
       <h1 style="margin-top:6px">Профиль</h1>
     </header>
 
+    <!-- шапка: кто ты и главный итог -->
     <div class="glass">
       <div class="profile-head">
         <div class="avatar" id="pf-avatar">?</div>
@@ -375,26 +319,38 @@
       </div>
     </div>
 
-    <div class="stat-grid" style="margin-top:10px">
+    <!-- две колонки: алгоритм и живые люди. Рядом, потому что это
+         два ответа на один вопрос, и сравнивать их интересно -->
+    <p class="eyebrow section-title">Оценки</p>
+    <div class="duo">
+      <div class="glass duo-card">
+        <span class="duo-tag">🧬 Разбор</span>
+        <span class="numeral duo-value" id="pf-scan-value">—</span>
+        <span class="duo-note" id="pf-scan-note">нет отчётов</span>
+      </div>
+      <div class="glass duo-card">
+        <span class="duo-tag">🔥 ChadMatch</span>
+        <span class="numeral duo-value" id="pf-peer-value">—</span>
+        <span class="duo-note" id="pf-peer-note">нет анкеты</span>
+      </div>
+    </div>
+
+    <div class="stat-grid" style="margin-top:9px">
       <div class="glass stat">
         <div class="numeral stat-value" id="pf-best">—</div>
         <div class="stat-label">Лучший</div>
       </div>
       <div class="glass stat">
-        <div class="numeral stat-value" id="pf-avg">—</div>
-        <div class="stat-label">Средний</div>
-      </div>
-      <div class="glass stat">
         <div class="numeral stat-value" id="pf-count">0</div>
         <div class="stat-label">Отчётов</div>
       </div>
+      <div class="glass stat">
+        <div class="numeral stat-value" id="pf-rated">0</div>
+        <div class="stat-label">Оценил</div>
+      </div>
     </div>
 
-    <div class="glass pad" style="margin-top:10px">
-      <p class="eyebrow">Оформление</p>
-      <div class="theme-grid" id="theme-grid"></div>
-    </div>
-
+    <!-- динамика -->
     <div class="glass" style="margin-top:12px">
       <div class="pad" style="padding-bottom:12px">
         <p class="eyebrow">Динамика</p>
@@ -408,6 +364,59 @@
         </div>
       </div>
       <div class="chart-box" id="chart-box"></div>
+    </div>
+
+    <!-- режим дня -->
+    <p class="eyebrow section-title">Режим</p>
+
+    <div class="glass streak-card">
+      <div class="streak-flame" id="td-flame">🔥</div>
+      <div>
+        <div class="numeral streak-num" id="td-streak">0</div>
+        <div class="streak-label" id="td-streak-label">дней подряд</div>
+      </div>
+      <div class="streak-side">
+        <div class="tiny">Лучшая серия</div>
+        <div class="numeral" id="td-best" style="font-size:19px">0</div>
+      </div>
+    </div>
+
+    <div class="glass pad" style="margin-top:10px">
+      <div class="rank-row">
+        <span class="rank-emoji" id="td-rank-emoji">🌱</span>
+        <div style="flex:1;min-width:0">
+          <h2 id="td-rank-title">Старт</h2>
+          <p class="tiny" id="td-rank-caption">—</p>
+        </div>
+      </div>
+      <div class="rank-bar"><i id="td-rank-fill"></i></div>
+      <p class="tiny" id="td-rank-next" style="margin-top:7px"></p>
+    </div>
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:8px;display:flex;justify-content:space-between;align-items:baseline">
+        <p class="eyebrow">Привычки дня</p>
+        <span class="tiny" id="td-progress">0 / 5</span>
+      </div>
+      <div id="td-habits"></div>
+      <p class="tiny" id="td-need" style="padding:0 16px 15px"></p>
+    </div>
+
+    <div class="glass pad scan-quota" id="td-quota"></div>
+    <div class="glass pad scan-quota hidden" id="td-buy-scan"></div>
+    <div class="glass pad xp-card" id="td-xp"></div>
+
+    <div class="glass" style="margin-top:10px">
+      <div class="pad" style="padding-bottom:10px">
+        <p class="eyebrow">Достижения</p>
+      </div>
+      <div class="ach-strip" id="td-achievements"></div>
+    </div>
+
+    <!-- оформление -->
+    <p class="eyebrow section-title">Оформление</p>
+    <div class="glass pad">
+      <div class="theme-grid" id="theme-grid"></div>
     </div>
 
     <p class="disclaimer">
@@ -578,6 +587,16 @@
       <p class="tiny" style="margin-top:10px;text-align:center" id="pr-left"></p>
     </div>
 
+    <!-- пополнение пула: видно только владельцу -->
+    <div class="glass pad hidden" id="pr-seed">
+      <p class="eyebrow">Наполнение</p>
+      <p class="tiny" style="margin-top:6px" id="pr-seed-note"></p>
+      <button class="btn btn-glass" id="pr-seed-pick" style="margin-top:11px">
+        Добавить фотографии
+      </button>
+      <input type="file" id="pr-seed-files" accept="image/*" multiple class="hidden">
+    </div>
+
     <div class="glass pad hidden" id="pr-empty">
       <h3>Анкеты закончились</h3>
       <p class="tiny" style="margin-top:6px">
@@ -589,11 +608,12 @@
   <!-- ══════════════ ТАБ-БАР ══════════════ -->
   <nav class="tabs" id="tabs">
     <div class="tab-pill" id="tab-pill"></div>
-    <button class="tab active" data-screen="s-today">
+    <button class="tab active" data-screen="s-profile">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3c.6 3 2.2 4.2 3.6 5.6A7.5 7.5 0 0 1 18 14a6 6 0 0 1-12 0c0-1.8.8-3.4 2-4.6 0 1.2.8 2.1 1.8 2.1 1.4 0 2.2-1.4 1.6-3.3-.5-1.7-.2-3.6.6-5.2z"/>
+        <path d="M3 17l5-5 4 3 5-6 4 4"/>
+        <path d="M3 21h18"/>
       </svg>
-      Сегодня
+      Профиль
     </button>
     <button class="tab" data-screen="s-scan">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -601,13 +621,6 @@
         <circle cx="12" cy="12" r="3.2"/>
       </svg>
       Скан
-    </button>
-    <button class="tab" data-screen="s-profile">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 17l5-5 4 3 5-6 4 4"/>
-        <path d="M3 21h18"/>
-      </svg>
-      Профиль
     </button>
     <button class="tab" data-screen="s-friends">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">

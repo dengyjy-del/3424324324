@@ -1761,3 +1761,53 @@ h3 {
   background-clip: text;
   color: transparent;
 }
+
+/* ── Профиль: заголовки секций и две колонки оценок ─────── */
+
+.section-title {
+  margin: 22px 0 9px 4px;
+}
+
+/* Алгоритм и живые люди — рядом: это два ответа на один вопрос */
+.duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.duo-card {
+  padding: 15px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.duo-tag {
+  font-size: 11.5px;
+  font-weight: 620;
+  color: var(--ink-2);
+  letter-spacing: 0.01em;
+}
+
+.duo-value {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.duo-note {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.3;
+}
+
+/* Подсветка колонки, где результат уже есть */
+.duo-card.filled .duo-value {
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-rose));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

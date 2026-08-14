@@ -411,8 +411,8 @@ async def cmd_demo_off(message: Message, demo: DemoState) -> None:
 
 
 def _peer_open(config: Config, user_id: int) -> bool:
-    """Пока раздел закрыт и доступен только владельцу."""
-    return config.is_admin(user_id)
+    """Кому виден ChadMatch: владельцу, списку PEER_IDS или всем."""
+    return config.peer_allowed(user_id)
 
 
 async def _peer_state_for(db: Database, user_id: int) -> dict:
@@ -489,9 +489,7 @@ async def cmd_seed(message: Message, db: Database, config: Config) -> None:
         return
 
     await message.answer(
-        texts.seed_status(
-            len(await db.peer_seed_keys()), seed_diagnostics()
-        )
+        texts.seed_status(len(await db.peer_seed_list()), seed_diagnostics())
     )
 
 
@@ -580,10 +578,11 @@ async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
         await message.answer(texts.PEER_EMPTY)
         return
 
+    target, photo, name, age = seed
     await message.answer_photo(
-        seed[1],
-        caption=texts.peer_card("", 0),
-        reply_markup=keyboards.peer_vote(seed[0]),
+        photo,
+        caption=texts.peer_card(name, age),
+        reply_markup=keyboards.peer_vote(target),
     )
 
 
@@ -598,19 +597,24 @@ async def _next_seed(db: Database, user_id: int):
 
     seen = await db.peer_seen(user_id)
 
-    for key in await db.peer_seed_keys():
+    from webapp.server import _filler_identity
+
+    for row in await db.peer_seed_list():
+        key = row["key"]
         if f"pool:{key}" in seen:
             continue
         data = await db.peer_seed_photo(key)
         if data:
-            return f"pool:{key}", BufferedInputFile(data, filename="p.jpg")
+            name, age = _filler_identity(key, row.get("name"), row.get("age"))
+            return f"pool:{key}", BufferedInputFile(data, filename="p.jpg"), name, age
 
-    for name in seed_files():
-        if f"seed:{name}" in seen:
+    for file_name in seed_files():
+        if f"seed:{file_name}" in seen:
             continue
-        data = seed_photo_from_folder(name)
+        data = seed_photo_from_folder(file_name)
         if data:
-            return f"seed:{name}", BufferedInputFile(data, filename=name)
+            name, age = _filler_identity(file_name, None, None)
+            return f"seed:{file_name}", BufferedInputFile(data, filename=file_name), name, age
 
     return None
 
@@ -864,8 +868,11 @@ async def _add_to_seed(message: Message, db: Database, user: User) -> None:
     data = payload.read()
 
     key = hashlib.sha256(data).hexdigest()[:32]
-    fresh = await db.peer_seed_add(key, data, user.id)
-    total = len(await db.peer_seed_keys())
+    parsed = peer.parse_identity(message.caption or "")
+    name, age = parsed if parsed else (None, None)
+
+    fresh = await db.peer_seed_add(key, data, user.id, name, age)
+    total = len(await db.peer_seed_list())
 
     # Альбом присылают пачкой — отвечаем коротко, чтобы не спамить
     await message.answer(
