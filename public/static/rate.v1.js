@@ -7,6 +7,7 @@
 
   const tg = window.Telegram && window.Telegram.WebApp;
   const INIT = tg ? tg.initData : "";
+
   const ROOT = () => document.getElementById("rate-root");
 
   let st = null;
@@ -23,7 +24,14 @@
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(Object.assign({ initData: INIT }, o.json));
     }
-    const res = await fetch("/api/faces" + path, { method: o.method || "GET", headers, body });
+    let res;
+    try {
+      res = await fetch("/api/faces" + path, { method: o.method || "GET", headers, body });
+    } catch (e) {
+      // Сеть отвалилась: возвращаем свой ответ, иначе исключение уйдёт
+      // наверх и экран просто замрёт без объяснений.
+      return { ok: false, status: 0, data: { error: "Нет связи с сервером" } };
+    }
     let data = {};
     try { data = await res.json(); } catch (e) {}
     return { ok: res.ok, status: res.status, data };
@@ -145,7 +153,8 @@
       btn.disabled = false;
       btn.textContent = "Загрузить и начать";
       if (!r.ok) {
-        document.getElementById("rt-err").textContent = r.data.error || "Не удалось загрузить";
+        document.getElementById("rt-err").textContent =
+          r.data.error || "Не удалось загрузить (код " + r.status + ")";
         return;
       }
       haptic("ok");
@@ -330,7 +339,8 @@
   async function refresh() {
     const r = await api("/state");
     if (!r.ok) {
-      screenBlocked("Раздел недоступен", (r.data && r.data.error) || "Попробуйте позже.");
+      screenBlocked("Раздел недоступен",
+        (r.data && r.data.error) || "Попробуйте позже.");
       return;
     }
     st = r.data;

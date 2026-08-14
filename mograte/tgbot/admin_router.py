@@ -131,16 +131,18 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
             if file_id:
                 await message.answer_photo(file_id, caption=text, reply_markup=markup)
                 continue
-            path = None
+            data = None
             if snap.get("kind") == "live" and snap.get("photo_path"):
-                path = photos.path_for(snap["photo_path"])
+                data = await photos.load(snap["photo_path"])
             elif snap.get("kind") == "seed" and snap.get("file_name"):
-                path = config.SEED_DIR / snap["file_name"]
-            if path and path.exists():
-                from aiogram.types import FSInputFile
+                data = photos.read_seed(snap["file_name"])
+            if data:
+                from aiogram.types import BufferedInputFile
 
                 await message.answer_photo(
-                    FSInputFile(path), caption=text, reply_markup=markup
+                    BufferedInputFile(data, filename="r.jpg"),
+                    caption=text,
+                    reply_markup=markup,
                 )
             else:
                 await message.answer(text, reply_markup=markup)

@@ -163,6 +163,12 @@ try:
         _observer.middleware(_throttle)
         _observer.middleware(_subscription)
 
+    # Раздел оценок: его роутеры идут ПЕРЕД основным, иначе фото и текст
+    # перехватят обработчики отчётов и кода режима съёмки.
+    from mograte.integration import attach_rate
+
+    attach_rate(dispatcher, config, bot)
+
     dispatcher.include_router(handlers.router)
 
     # Одинаковое меню команд у основного бота и у всех зеркал.
@@ -269,6 +275,12 @@ else:
         global _ready
         if not _ready:
             await db.connect()
+            # Таблицы раздела оценок — на том же соединении, что и всё
+            # остальное. Отдельный пул на serverless означал бы лишние
+            # соединения к базе.
+            from mograte.core import db as rate_db
+
+            await rate_db.attach(db)
             _ready = True
 
     @app.middleware("http")
