@@ -93,14 +93,6 @@ async def run(config: Config) -> None:
     db = create_database(config.database_url)
     await db.connect()
 
-    # Раздел оценок держит свои таблицы в той же базе: на serverless
-    # отдельный файл не пережил бы деплой, и данные разъехались бы.
-    from mograte.core import db as rate_db
-    from mograte.core import seed_loader as rate_seed
-
-    await rate_db.connect(config.database_url)
-    await rate_seed.load(verbose=True)
-
     dispatcher = Dispatcher()
     dispatcher["db"] = db
     dispatcher["config"] = config
@@ -116,12 +108,6 @@ async def run(config: Config) -> None:
     for observer in (dispatcher.message, dispatcher.callback_query):
         observer.middleware(throttle)
         observer.middleware(subscription)
-
-    # Раздел оценок: свои роутеры идут ПЕРЕД основным, иначе фото
-    # и текст перехватят обработчики отчётов и кода режима съёмки.
-    from mograte.integration import attach_rate
-
-    attach_rate(dispatcher, config, bot)
 
     dispatcher.include_router(handlers.router)
 
@@ -183,9 +169,6 @@ async def run(config: Config) -> None:
         for task in tasks:
             task.cancel()
         await db.close()
-        from mograte.core import db as rate_db
-
-        await rate_db.close()
         for current in bots:
             await current.session.close()
         logger.info("Бот остановлен")

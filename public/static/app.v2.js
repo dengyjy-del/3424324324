@@ -502,7 +502,7 @@ function enterApp() {
   showScreen("s-today");
   initTabs();
   loadToday();
-  /* убрано вместе с разделом «Гайды»: loadGuides(); */
+  loadGuides();
 }
 
 /* ── Скан ────────────────────────────────────────────────── */
@@ -1403,7 +1403,7 @@ async function buyGuide(id, price) {
     await api("/api/buy", { method: "POST", body });
     notifySuccess();
     toast("Гайд открыт");
-    await /* убрано вместе с разделом «Гайды»: loadGuides(); */
+    await loadGuides();
     loadToday();
   } catch (error) {
     toast(error.message);
@@ -1543,10 +1543,7 @@ async function boot() {
     state.channel = session.channel || state.channel;
     state.brand = session.brand || state.brand;
     // Вкладка разметки существует только для владельца
-    if (session.is_admin) {
-      $("tab-label").classList.remove("hidden");
-      $("tab-rate").classList.remove("hidden");
-    }
+    if (session.is_admin) $("tab-label").classList.remove("hidden");
     applyTheme(session.theme || "classic");
     state.modelVersion = session.model_version || "";
     if (session.is_admin && state.modelVersion) {

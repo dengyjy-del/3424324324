@@ -411,8 +411,14 @@ https://<твой-домен>.vercel.app/api/bots?key=<SETUP_KEY>
 
 ```json
 {"ok": true, "database": "postgres", "database_connected": true,
- "bots_total": 16, "mirrors": 15}
+ "bots_total": 16, "mirrors": 15,
+ "demo": {"code_set": true, "code_length": 45, "restricted_to_admins": true}}
 ```
+
+Блок `demo` показывает, доехали ли `DEMO_CODE` и `ADMIN_IDS`. Сам код не
+раскрывается — только его длина, чтобы поймать лишний пробел или обрезанную
+строку. Переменная общая на весь деплой: режим съёмки либо работает у всех
+ботов сразу, либо ни у кого.
 
 Если ботов меньше, чем вписано токенов — смотри поле `skipped_vars`: там имена
 переменных, значения которых не похожи на токен.

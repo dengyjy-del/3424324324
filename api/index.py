@@ -47,6 +47,7 @@ RECOMMENDED_VARS = (
     "WEBHOOK_SECRET",
     "SETUP_KEY",
     "ADMIN_IDS",
+    "DEMO_CODE",
 )
 
 def _redact(text: str) -> str:
@@ -100,13 +101,6 @@ try:
         )
 
     db = create_database(config.database_url)
-
-    # Раздел оценок держит таблицы в той же базе.
-
-    from mograte.core import db as rate_db
-
-
-    await rate_db.connect(config.database_url)
     demo = DemoState(db, config.demo_ttl_minutes)
     gate = SubscriptionGate(*config.gate_sources)
 
@@ -169,12 +163,6 @@ try:
     for _observer in (dispatcher.message, dispatcher.callback_query):
         _observer.middleware(_throttle)
         _observer.middleware(_subscription)
-
-    # Раздел оценок: свои роутеры идут ПЕРЕД основным, иначе фото и текст
-    # перехватят обработчики отчётов и кода режима съёмки.
-    from mograte.integration import attach_rate
-
-    attach_rate(dispatcher, config, bot)
 
     dispatcher.include_router(handlers.router)
 
@@ -324,6 +312,23 @@ else:
             "mirrors": len(bots) - 1,
             "bot_ids": list(bots),
             "skipped_vars": list(config.rejected_token_vars),
+            # Режим съёмки: одна переменная на весь деплой, поэтому он либо
+            # работает у всех ботов сразу, либо ни у кого. Значение не
+            # показываем — только длину, чтобы поймать лишний пробел или
+            # обрезанную строку.
+            "demo": {
+                "code_set": bool(config.demo_code),
+                "code_length": len(config.demo_code),
+                "restricted_to_admins": bool(config.admin_ids),
+                "ttl_minutes": config.demo_ttl_minutes,
+                "problem": (
+                    "DEMO_CODE не задан — режим выключен у всех ботов"
+                    if not config.demo_code
+                    else "ADMIN_IDS пуст — код сработает у любого, кто его узнает"
+                    if not config.admin_ids
+                    else ""
+                ),
+            },
             "details": "подробности по каждому боту: /api/bots?key=<SETUP_KEY>",
         }
 
