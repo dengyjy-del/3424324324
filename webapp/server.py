@@ -229,9 +229,8 @@ def create_app(
             today_key = date.today().isoformat()
             bought = await db.count_purchases(user.id, f"scan:{today_key}:")
             gift = await _gift_scans()
-            mine = await _personal_tries(user.id)
             used = await db.count_ratings_since(user.id, _day_start())
-            if used >= config.daily_scan_limit + bought + gift + mine:
+            if used >= config.daily_scan_limit + bought + gift:
                 raise HTTPException(
                     status_code=429,
                     detail=(
@@ -602,12 +601,6 @@ def create_app(
         except (TypeError, ValueError):
             rating.set_strictness(0.0)
 
-    async def _personal_tries(user_id: int) -> int:
-        """Попытки, выданные лично этому человеку через /tries."""
-        from mograte.tgbot.tries_router import granted_for
-
-        return await granted_for(db, user_id)
-
     async def _gift_scans() -> int:
         """
         Сколько бесплатных попыток владелец подарил всем на сегодня.
@@ -685,10 +678,9 @@ def create_app(
             },
             "scans": {
                 "used": used_today,
-                "limit": config.daily_scan_limit + extra + gift + mine,
-                "left": max(0, config.daily_scan_limit + extra + gift + mine - used_today),
+                "limit": config.daily_scan_limit + extra + gift,
+                "left": max(0, config.daily_scan_limit + extra + gift - used_today),
                 "gift": gift,
-                "granted": mine,
                 "unlimited": unlimited,
                 "extra": extra,
                 "extra_price": engagement.EXTRA_SCAN_PRICE,

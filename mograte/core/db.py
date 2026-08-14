@@ -128,25 +128,6 @@ SCHEMA = [
         created_at BIGINT NOT NULL
     )
     """,
-    # Фото анкет. На serverless диск только для чтения, поэтому
-    # единственное надёжное место — та же база.
-    """
-    CREATE TABLE IF NOT EXISTS rate_photos (
-        name       TEXT   PRIMARY KEY,
-        owner_id   BIGINT NOT NULL,
-        data       BLOB   NOT NULL,
-        created_at BIGINT NOT NULL
-    )
-    """,
-    # Telegram не даёт узнать id по @username. Запоминаем сами, когда
-    # человек пишет боту, — иначе /tries @ник работать не сможет.
-    """
-    CREATE TABLE IF NOT EXISTS rate_usernames (
-        username TEXT   PRIMARY KEY,
-        user_id  BIGINT NOT NULL,
-        seen_at  BIGINT NOT NULL
-    )
-    """,
 ]
 
 
@@ -257,7 +238,7 @@ class _Postgres(_Backend):
         self._pool = await asyncpg.create_pool(self._url, min_size=1, max_size=5)
         async with self._pool.acquire() as conn:
             for stmt in SCHEMA:
-                await conn.execute(stmt.replace("BLOB", "BYTEA"))
+                await conn.execute(stmt)
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -689,61 +670,3 @@ async def global_stats() -> dict:
         "reports_open": await c("SELECT COUNT(*) AS c FROM rate_reports WHERE status='new'"),
         "demo_cards": await c("SELECT COUNT(*) AS c FROM rate_demo_log"),
     }
-
-
-# ─────────────────────────── фото ───────────────────────────────────────────
-
-async def save_photo(name: str, owner_id: int, data: bytes) -> None:
-    await _run(
-        "INSERT INTO rate_photos(name, owner_id, data, created_at) VALUES (?,?,?,?)",
-        (name, owner_id, data, now()),
-    )
-
-
-async def load_photo(name: str) -> bytes | None:
-    row = await _one("SELECT data FROM rate_photos WHERE name=?", (name,))
-    if not row:
-        return None
-    data = row["data"]
-    # SQLite отдаёт bytes, asyncpg — bytes; memoryview встречается у драйверов
-    # с нулевым копированием, поэтому приводим явно.
-    return bytes(data) if data is not None else None
-
-
-async def delete_photo(name: str) -> None:
-    await _run("DELETE FROM rate_photos WHERE name=?", (name,))
-
-
-async def photos_bytes_total() -> int:
-    """Сколько места занято фото — для диагностики."""
-    if _is_pg():
-        row = await _one("SELECT COALESCE(SUM(LENGTH(data)),0) AS c FROM rate_photos")
-    else:
-        row = await _one("SELECT COALESCE(SUM(LENGTH(data)),0) AS c FROM rate_photos")
-    return int(row["c"]) if row else 0
-
-
-# ─────────────────────────── username -> id ─────────────────────────────────
-
-async def remember_username(user_id: int, username: str | None) -> None:
-    """Запоминает @username, когда человек пишет боту.
-
-    Ник может смениться и переехать к другому человеку, поэтому старую
-    запись с тем же ником перетираем, а не дополняем.
-    """
-    if not username:
-        return
-    key = username.lstrip("@").lower()
-    if not key:
-        return
-    await _run("DELETE FROM rate_usernames WHERE username=?", (key,))
-    await _run(
-        "INSERT INTO rate_usernames(username, user_id, seen_at) VALUES (?,?,?)",
-        (key, user_id, now()),
-    )
-
-
-async def resolve_username(username: str) -> int | None:
-    key = username.lstrip("@").lower()
-    row = await _one("SELECT user_id FROM rate_usernames WHERE username=?", (key,))
-    return int(row["user_id"]) if row else None

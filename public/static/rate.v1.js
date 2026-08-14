@@ -145,8 +145,7 @@
       btn.disabled = false;
       btn.textContent = "Загрузить и начать";
       if (!r.ok) {
-        document.getElementById("rt-err").textContent =
-          r.data.error || "Не удалось загрузить (код " + r.status + ")";
+        document.getElementById("rt-err").textContent = r.data.error || "Не удалось загрузить";
         return;
       }
       haptic("ok");
