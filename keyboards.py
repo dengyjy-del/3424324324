@@ -24,6 +24,12 @@ def main_menu(webapp_url: str = "") -> InlineKeyboardMarkup:
                 text="✨ Открыть приложение", web_app=WebAppInfo(url=webapp_url)
             )
         )
+    # ChadMatch — первым и отдельной строкой. Цвет инлайн-кнопкам Telegram
+    # задать не даёт, поэтому выделяем единственным доступным способом:
+    # своя строка над остальными, рамка из символов и яркая эмодзи.
+    builder.row(
+        InlineKeyboardButton(text="🔥 ChadMatch — оценки от людей", callback_data="peer")
+    )
     builder.row(InlineKeyboardButton(text="📸 Как получить отчёт", callback_data="howto"))
     builder.row(
         InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="ref"),
@@ -152,4 +158,18 @@ def peer_demo_card(username: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⭐ Оценить", callback_data="demo:rate"),
         InlineKeyboardButton(text="✉️ Написать", url=f"https://t.me/{username}"),
     )
+    return builder.as_markup()
+
+
+def peer_menu(webapp_url: str = "") -> InlineKeyboardMarkup:
+    """Меню ChadMatch: приложение удобнее, но всё работает и в чате."""
+    builder = InlineKeyboardBuilder()
+    if webapp_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔥 Открыть ChadMatch", web_app=WebAppInfo(url=webapp_url)
+            )
+        )
+    builder.row(InlineKeyboardButton(text="⭐ Оценивать здесь", callback_data="prate"))
+    builder.row(InlineKeyboardButton(text="← Назад", callback_data="back"))
     return builder.as_markup()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,6 @@ import texts
 from access import DemoState, SubscriptionGate
 from config import Config
 from database import BaseDatabase as Database
-from webapp.server import SEED_DIR
 from rating import generate_report
 
 logger = logging.getLogger(__name__)
@@ -458,6 +458,43 @@ async def cmd_peer_delete(message: Message, db: Database, config: Config) -> Non
     await message.answer(texts.PEER_DELETED)
 
 
+@router.message(Command("seed"))
+async def cmd_seed(message: Message, db: Database, config: Config) -> None:
+    """
+    /seed on — следующие фото уходят в пул наполнения, /seed off — обратно.
+    /seed — сколько снимков в пуле и что видно серверу.
+    """
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    from webapp.server import seed_diagnostics
+
+    parts = (message.text or "").split()
+    mode = parts[1].lower() if len(parts) > 1 else ""
+
+    if mode in ("on", "вкл"):
+        await db.set_setting(f"seedmode:{user.id}", "1")
+        await message.answer(texts.SEED_ON)
+        return
+
+    if mode in ("off", "выкл"):
+        await db.set_setting(f"seedmode:{user.id}", "")
+        await message.answer(texts.SEED_OFF)
+        return
+
+    if mode in ("clear", "очистить"):
+        removed = await db.peer_seed_clear()
+        await message.answer(f"🗑 Удалено снимков из пула: <b>{removed}</b>")
+        return
+
+    await message.answer(
+        texts.seed_status(
+            len(await db.peer_seed_keys()), seed_diagnostics()
+        )
+    )
+
+
 @router.message(Command("peer_stats"))
 async def cmd_peer_stats(message: Message, db: Database, config: Config) -> None:
     user = message.from_user
@@ -546,20 +583,35 @@ async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
     await message.answer_photo(
         seed[1],
         caption=texts.peer_card("", 0),
-        reply_markup=keyboards.peer_vote(f"seed:{seed[0]}"),
+        reply_markup=keyboards.peer_vote(seed[0]),
     )
 
 
 async def _next_seed(db: Database, user_id: int):
-    """Снимок из папки, который этот человек ещё не видел."""
-    from webapp.server import seed_files
+    """
+    Снимок наполнения, который этот человек ещё не видел.
+
+    Сначала пул из базы, потом папка репозитория: пул надёжнее, файлы из
+    репозитория доезжают до функции не на всех конфигурациях сборки.
+    """
+    from webapp.server import seed_files, seed_photo_from_folder
 
     seen = await db.peer_seen(user_id)
+
+    for key in await db.peer_seed_keys():
+        if f"pool:{key}" in seen:
+            continue
+        data = await db.peer_seed_photo(key)
+        if data:
+            return f"pool:{key}", BufferedInputFile(data, filename="p.jpg")
+
     for name in seed_files():
-        if f"seed:{name}" not in seen:
-            path = SEED_DIR / name
-            with contextlib.suppress(OSError):
-                return name, BufferedInputFile(path.read_bytes(), filename=name)
+        if f"seed:{name}" in seen:
+            continue
+        data = seed_photo_from_folder(name)
+        if data:
+            return f"seed:{name}", BufferedInputFile(data, filename=name)
+
     return None
 
 
@@ -569,6 +621,15 @@ async def cmd_rate(message: Message, db: Database, config: Config) -> None:
     if user is None or not _peer_open(config, user.id):
         return
     await _send_next_card(message, db, user.id)
+
+
+@router.callback_query(F.data == "prate")
+async def cb_peer_rate(callback: CallbackQuery, db: Database, config: Config) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+    await _send_next_card(callback.message, db, user.id)
 
 
 @router.callback_query(F.data == "pnext")
@@ -768,6 +829,11 @@ async def handle_photo(
     if message.media_group_id and not await db.claim_album(message.media_group_id):
         return
 
+    # Пополнение пула наполнения: включается через /seed on
+    if config.is_admin(user.id) and await db.get_setting(f"seedmode:{user.id}"):
+        await _add_to_seed(message, db, user)
+        return
+
     if await demo.is_active(user.id):
         # Подпись различает два сценария съёмки: с ней снимаем карточку
         # «тебя оценили», без неё — обычный разбор по фото.
@@ -789,6 +855,22 @@ async def handle_photo(
         )
     else:
         await message.answer(texts.PHOTO_NO_APP)
+
+
+async def _add_to_seed(message: Message, db: Database, user: User) -> None:
+    """Кладёт присланное фото в пул наполнения."""
+    photo = message.photo[-1]
+    payload = await message.bot.download(photo.file_id)
+    data = payload.read()
+
+    key = hashlib.sha256(data).hexdigest()[:32]
+    fresh = await db.peer_seed_add(key, data, user.id)
+    total = len(await db.peer_seed_keys())
+
+    # Альбом присылают пачкой — отвечаем коротко, чтобы не спамить
+    await message.answer(
+        f"{'✅ Добавлено' if fresh else '↩️ Уже было'} · в пуле: <b>{total}</b>"
+    )
 
 
 async def _demo_peer_card(message: Message, db: Database, user: User) -> None:
@@ -1057,6 +1139,23 @@ async def cb_ref_enter(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.message.answer(texts.REF_HOWTO, reply_markup=keyboards.back_menu())
+
+
+@router.callback_query(F.data == "peer")
+async def cb_peer(callback: CallbackQuery, db: Database, config: Config) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None:
+        return
+
+    if not _peer_open(config, user.id):
+        await callback.message.answer(texts.PEER_CLOSED)
+        return
+
+    await callback.message.answer(
+        texts.peer_intro(await _peer_state_for(db, user.id)),
+        reply_markup=keyboards.peer_menu(config.webapp_url),
+    )
 
 
 @router.callback_query(F.data == "stats")

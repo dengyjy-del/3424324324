@@ -222,6 +222,18 @@ class BaseDatabase(ABC):
     async def peer_close_report(self, report_id: int, status: str) -> None: ...
 
     @abstractmethod
+    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool: ...
+
+    @abstractmethod
+    async def peer_seed_keys(self) -> list[str]: ...
+
+    @abstractmethod
+    async def peer_seed_photo(self, key: str) -> bytes | None: ...
+
+    @abstractmethod
+    async def peer_seed_clear(self) -> int: ...
+
+    @abstractmethod
     async def peer_stats(self) -> dict: ...
 
     async def diagnose_labels(self) -> dict:
@@ -364,6 +376,16 @@ CREATE TABLE IF NOT EXISTS peer_reports (
     reason      TEXT,
     status      TEXT    NOT NULL DEFAULT 'open',
     created_at  TEXT    NOT NULL
+);
+
+-- Пул снимков для наполнения. Держим в базе, а не только в папке: файлы
+-- из репозитория попадают в serverless-функцию только при верной настройке
+-- сборки, и молчаливо не попасть туда — слишком частая беда.
+CREATE TABLE IF NOT EXISTS peer_seed (
+    key        TEXT PRIMARY KEY,
+    photo      BLOB NOT NULL,
+    added_by   INTEGER,
+    created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
@@ -936,6 +958,35 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
 
+    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool:
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO peer_seed (key, photo, added_by, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (key, photo, added_by, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def peer_seed_keys(self) -> list[str]:
+        async with self.conn.execute(
+            "SELECT key FROM peer_seed ORDER BY created_at"
+        ) as cursor:
+            return [r["key"] for r in await cursor.fetchall()]
+
+    async def peer_seed_photo(self, key: str) -> bytes | None:
+        async with self.conn.execute(
+            "SELECT photo FROM peer_seed WHERE key = ?", (key,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return bytes(row["photo"]) if row else None
+
+    async def peer_seed_clear(self) -> int:
+        cursor = await self.conn.execute("DELETE FROM peer_seed")
+        await self.conn.commit()
+        return cursor.rowcount
+
     async def peer_stats(self) -> dict:
         async with self.conn.execute(
             """
@@ -1195,6 +1246,13 @@ CREATE TABLE IF NOT EXISTS peer_reports (
     reason      TEXT,
     status      TEXT   NOT NULL DEFAULT 'open',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS peer_seed (
+    key        TEXT PRIMARY KEY,
+    photo      BYTEA NOT NULL,
+    added_by   BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
@@ -1782,6 +1840,34 @@ class PostgresDatabase(BaseDatabase):
             await conn.execute(
                 "UPDATE peer_reports SET status = $1 WHERE id = $2", status, report_id
             )
+
+    async def peer_seed_add(self, key: str, photo: bytes, added_by: int) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                INSERT INTO peer_seed (key, photo, added_by) VALUES ($1, $2, $3)
+                ON CONFLICT DO NOTHING RETURNING key
+                """,
+                key, photo, added_by,
+            )
+        return row is not None
+
+    async def peer_seed_keys(self) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT key FROM peer_seed ORDER BY created_at")
+        return [r["key"] for r in rows]
+
+    async def peer_seed_photo(self, key: str) -> bytes | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT photo FROM peer_seed WHERE key = $1", key
+            )
+        return bytes(value) if value else None
+
+    async def peer_seed_clear(self) -> int:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM peer_seed")
+        return int(result.split()[-1]) if result else 0
 
     async def peer_stats(self) -> dict:
         async with self.pool.acquire() as conn:

@@ -53,22 +53,66 @@ MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 # Фото анкеты хранится в базе, поэтому лимит жёстче: браузер ужимает снимок
 # до ~700px перед отправкой, и в норме получается 60-120 КБ.
 MAX_PEER_PHOTO_BYTES = 900 * 1024
-SEED_DIR = Path(__file__).resolve().parent.parent / "public" / "seed"
+# Папку ищем по нескольким путям: на serverless корень проекта не всегда
+# совпадает с тем, что видно из модуля, и одна жёсткая константа молча даёт
+# пустой список вместо ошибки.
+SEED_CANDIDATES = (
+    Path(__file__).resolve().parent.parent / "public" / "seed",
+    Path.cwd() / "public" / "seed",
+    Path("/var/task/public/seed"),
+)
+
+
+def _seed_dir() -> Path | None:
+    for candidate in SEED_CANDIDATES:
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+SEED_DIR = SEED_CANDIDATES[0]
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
+SEED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+
+
 def seed_files() -> list[str]:
-    """
-    Снимки для наполнения из public/seed. Пока живых анкет мало, показывать
-    было бы нечего — оценивать пустоту люди не станут.
-    """
-    if not SEED_DIR.is_dir():
+    """Снимки из папки репозитория. Пустой список — не ошибка, а вариант."""
+    folder = _seed_dir()
+    if folder is None:
         return []
-    return sorted(
-        item.name
-        for item in SEED_DIR.iterdir()
-        if item.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
-    )
+    try:
+        return sorted(
+            item.name
+            for item in folder.iterdir()
+            if item.suffix.lower() in SEED_EXTENSIONS
+        )
+    except OSError:
+        return []
+
+
+def seed_photo_from_folder(name: str) -> bytes | None:
+    """Читает снимок из папки. Имя без разделителей пути — проверено выше."""
+    folder = _seed_dir()
+    if folder is None or "/" in name or "\\" in name or ".." in name:
+        return None
+    try:
+        return (folder / name).read_bytes()
+    except OSError:
+        return None
+
+
+def seed_diagnostics() -> dict:
+    """Что сервер видит на самом деле — чтобы не гадать при отладке."""
+    return {
+        "found": str(_seed_dir()) if _seed_dir() else None,
+        "checked": [str(path) for path in SEED_CANDIDATES],
+        "files": seed_files(),
+    }
 
 
 async def notify_report(
@@ -788,15 +832,31 @@ def create_app(
 
         if len(cards) < 6:
             seen = await db.peer_seen(user.id)
+
+            # Снимки из базы: добавлены владельцем через бота
+            for key in await db.peer_seed_keys():
+                target = f"pool:{key}"
+                if target in seen:
+                    continue
+                cards.append(
+                    {
+                        "target": target,
+                        "name": "",
+                        "age": 0,
+                        "photo": f"/api/peer/seed/{key}",
+                    }
+                )
+                if len(cards) >= 12:
+                    break
+
+            # Снимки из папки репозитория
             for name in seed_files():
                 target = f"seed:{name}"
-                if target in seen:
+                if target in seen or len(cards) >= 12:
                     continue
                 cards.append(
                     {"target": target, "name": "", "age": 0, "photo": f"/seed/{name}"}
                 )
-                if len(cards) >= 12:
-                    break
 
         return {"cards": cards, "votes_left": peer.DAILY_VOTE_LIMIT - used}
 
@@ -821,6 +881,30 @@ def create_app(
             headers={"Cache-Control": "private, max-age=300"},
         )
 
+    @app.get("/api/peer/seed/{key}")
+    async def peer_seed_photo(
+        key: str, user: TelegramUser = Depends(current_user)
+    ) -> Response:
+        await _peer_require_admin(user.id)
+        payload = await db.peer_seed_photo(key)
+        if not payload:
+            raise HTTPException(status_code=404, detail="Нет снимка")
+        return Response(
+            content=payload,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=600"},
+        )
+
+    @app.get("/api/peer/diag")
+    async def peer_diag(user: TelegramUser = Depends(current_user)) -> dict:
+        """Что видно серверу: папка, пул в базе, число анкет."""
+        await _peer_require_admin(user.id)
+        return {
+            "folder": seed_diagnostics(),
+            "pool_in_db": len(await db.peer_seed_keys()),
+            "stats": await db.peer_stats(),
+        }
+
     @app.post("/api/peer/vote")
     async def peer_vote(
         target: str = Form(...),
@@ -832,7 +916,7 @@ def create_app(
         chosen = peer.TIER_BY_KEY.get(tier)
         if chosen is None:
             raise HTTPException(status_code=400, detail="Неизвестная оценка")
-        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80})", target):
+        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80}|pool:[0-9a-f]{8,64})", target):
             raise HTTPException(status_code=400, detail="Некорректная цель")
         if target == f"u:{user.id}":
             raise HTTPException(status_code=400, detail="Себя оценивать нельзя")
@@ -857,7 +941,7 @@ def create_app(
     ) -> dict:
         await _peer_require_admin(user.id)
 
-        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80})", target):
+        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80}|pool:[0-9a-f]{8,64})", target):
             raise HTTPException(status_code=400, detail="Некорректная цель")
         if reason not in peer.REASON_TITLES:
             reason = "other"
