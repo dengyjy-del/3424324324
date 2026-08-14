@@ -81,3 +81,75 @@ def open_app(webapp_url: str) -> InlineKeyboardMarkup:
         )
     )
     return builder.as_markup()
+
+
+# ───────────────────── режим взаимных оценок ───────────────────────────────
+
+
+def report_actions(report_id: int, target: str) -> InlineKeyboardMarkup:
+    """Решение по жалобе: удалить анкету или скрыть на сутки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="🚫 Удалить анкету", callback_data=f"rep:del:{report_id}:{target}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🙈 Скрыть на 24 часа", callback_data=f"rep:hide:{report_id}:{target}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Оставить", callback_data=f"rep:keep:{report_id}:{target}"
+        )
+    )
+    return builder.as_markup()
+
+
+def peer_vote(target: str) -> InlineKeyboardMarkup:
+    """Кнопки оценки для бота: та же шкала, что и в приложении."""
+    from peer import PEER_TIERS
+
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    for tier in PEER_TIERS:
+        row.append(
+            InlineKeyboardButton(
+                text=f"{tier.emoji} {tier.title}",
+                callback_data=f"pv:{tier.key}:{target}",
+            )
+        )
+        if len(row) == 2:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+
+    builder.row(
+        InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
+        InlineKeyboardButton(text="⏭ Дальше", callback_data="pnext"),
+    )
+    return builder.as_markup()
+
+
+def peer_report_reasons(target: str) -> InlineKeyboardMarkup:
+    from peer import REPORT_REASONS
+
+    builder = InlineKeyboardBuilder()
+    for key, title in REPORT_REASONS:
+        builder.row(
+            InlineKeyboardButton(text=title, callback_data=f"prr:{key}:{target}")
+        )
+    builder.row(InlineKeyboardButton(text="← Отмена", callback_data="pnext"))
+    return builder.as_markup()
+
+
+def peer_demo_card(username: str) -> InlineKeyboardMarkup:
+    """Карточка для съёмки: как выглядит уведомление об оценке."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⭐ Оценить", callback_data="demo:rate"),
+        InlineKeyboardButton(text="✉️ Написать", url=f"https://t.me/{username}"),
+    )
+    return builder.as_markup()

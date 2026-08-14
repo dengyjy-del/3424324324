@@ -20,11 +20,13 @@ from aiogram.types import (
 )
 
 import keyboards
+import peer
 import rating
 import texts
 from access import DemoState, SubscriptionGate
 from config import Config
 from database import BaseDatabase as Database
+from webapp.server import SEED_DIR
 from rating import generate_report
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,14 @@ def display_name(user: User | None) -> str:
 
 
 # ────────────────────────────── команды ────────────────────────────────────
+
+
+async def _remember(message: Message, db: Database) -> None:
+    """Сохраняет @username: без него адресные команды работают только по ID."""
+    user = message.from_user
+    if user is not None and user.username:
+        with contextlib.suppress(Exception):
+            await db.remember_username(user.id, user.username)
 
 
 @router.message(CommandStart())
@@ -392,6 +402,349 @@ async def cmd_demo_off(message: Message, demo: DemoState) -> None:
 # ──────────────────────────────── фото ─────────────────────────────────────
 
 
+# ═══════════════════ РЕЖИМ ВЗАИМНЫХ ОЦЕНОК ═════════════════════════════════
+#
+# В боте режим повторяет приложение один в один: анкета, очередь, жалобы.
+# Состояние нигде не копится — на serverless между вызовами не сохраняется
+# ничего, кроме базы, поэтому анкета создаётся одним сообщением: фото плюс
+# подпись «имя, возраст».
+
+
+def _peer_open(config: Config, user_id: int) -> bool:
+    """Пока раздел закрыт и доступен только владельцу."""
+    return config.is_admin(user_id)
+
+
+async def _peer_state_for(db: Database, user_id: int) -> dict:
+    profile = await db.peer_profile(user_id)
+    used = await db.peer_votes_since(
+        user_id, datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    )
+    state = {"votes_left": max(0, peer.DAILY_VOTE_LIMIT - used), "profile": None}
+    if profile:
+        result = await db.peer_result(f"u:{user_id}")
+        hidden = profile.get("hidden_until")
+        state["profile"] = {
+            "name": profile["name"],
+            "age": profile["age"],
+            "status": profile["status"],
+            "hidden_until": hidden.isoformat() if isinstance(hidden, datetime) else hidden,
+            "hidden_note": profile.get("hidden_note"),
+            "votes": result["count"],
+            "average": result["average"],
+            "tier": (
+                peer.tier_for_score(result["average"]).title
+                if result["count"] >= 3 else None
+            ),
+        }
+    return state
+
+
+@router.message(Command("peer"))
+async def cmd_peer(message: Message, db: Database, config: Config) -> None:
+    user = message.from_user
+    if user is None or not _peer_open(config, user.id):
+        return
+    await _remember(message, db)
+    await message.answer(texts.peer_intro(await _peer_state_for(db, user.id)))
+
+
+@router.message(Command("peer_delete"))
+async def cmd_peer_delete(message: Message, db: Database, config: Config) -> None:
+    user = message.from_user
+    if user is None or not _peer_open(config, user.id):
+        return
+    await db.peer_delete(user.id)
+    await message.answer(texts.PEER_DELETED)
+
+
+@router.message(Command("peer_stats"))
+async def cmd_peer_stats(message: Message, db: Database, config: Config) -> None:
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+    await message.answer(texts.peer_admin_stats(await db.peer_stats()))
+
+
+def _parse_caption(caption: str) -> tuple[str, int] | None:
+    """Разбирает подпись вида «Макс, 19»."""
+    parts = [p.strip() for p in (caption or "").replace(";", ",").split(",")]
+    if len(parts) < 2:
+        return None
+    name = peer.clean_name(parts[0])
+    digits = "".join(ch for ch in parts[1] if ch.isdigit())
+    if not digits:
+        return None
+    return name, int(digits[:3])
+
+
+async def _peer_save_from_message(
+    message: Message, db: Database, user: User
+) -> bool:
+    """Создаёт анкету из фото с подписью. True, если получилось."""
+    parsed = _parse_caption(message.caption or "")
+    if parsed is None:
+        await message.answer(texts.PEER_BAD_CAPTION)
+        return True
+
+    name, age = parsed
+    problem = peer.name_error(name) or peer.age_error(age)
+    if problem:
+        await message.answer(f"❌ {texts.safe(problem)}")
+        return True
+
+    existing = await db.peer_profile(user.id)
+    if existing and existing.get("status") == "banned":
+        await message.answer(texts.PEER_BANNED_NOTICE)
+        return True
+
+    photo = message.photo[-1]
+    payload = await message.bot.download(photo.file_id)
+    data = payload.read()
+
+    await db.peer_save_profile(
+        user.id, name, age, data, photo.file_unique_id, peer.TERMS_VERSION
+    )
+    await _remember(message, db)
+    await message.answer(texts.PEER_SAVED)
+    return True
+
+
+async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
+    """Показывает следующую анкету из очереди."""
+    profile = await db.peer_profile(user_id)
+    if not profile or profile.get("status") != "active":
+        await message.answer(texts.PEER_NO_PROFILE)
+        return
+
+    used = await db.peer_votes_since(
+        user_id,
+        datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+    )
+    if used >= peer.DAILY_VOTE_LIMIT:
+        await message.answer("Лимит оценок на сегодня исчерпан.")
+        return
+
+    rows = await db.peer_next(user_id, limit=1)
+    if rows:
+        row = rows[0]
+        data = await db.peer_photo(row["user_id"])
+        if data:
+            await message.answer_photo(
+                BufferedInputFile(data, filename="p.jpg"),
+                caption=texts.peer_card(row["name"], row["age"]),
+                reply_markup=keyboards.peer_vote(f"u:{row['user_id']}"),
+            )
+            return
+
+    # Живых анкет не нашлось — берём снимок из папки наполнения
+    seed = await _next_seed(db, user_id)
+    if seed is None:
+        await message.answer(texts.PEER_EMPTY)
+        return
+
+    await message.answer_photo(
+        seed[1],
+        caption=texts.peer_card("", 0),
+        reply_markup=keyboards.peer_vote(f"seed:{seed[0]}"),
+    )
+
+
+async def _next_seed(db: Database, user_id: int):
+    """Снимок из папки, который этот человек ещё не видел."""
+    from webapp.server import seed_files
+
+    seen = await db.peer_seen(user_id)
+    for name in seed_files():
+        if f"seed:{name}" not in seen:
+            path = SEED_DIR / name
+            with contextlib.suppress(OSError):
+                return name, BufferedInputFile(path.read_bytes(), filename=name)
+    return None
+
+
+@router.message(Command("rate"))
+async def cmd_rate(message: Message, db: Database, config: Config) -> None:
+    user = message.from_user
+    if user is None or not _peer_open(config, user.id):
+        return
+    await _send_next_card(message, db, user.id)
+
+
+@router.callback_query(F.data == "pnext")
+async def cb_peer_next(callback: CallbackQuery, db: Database, config: Config) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+    await _send_next_card(callback.message, db, user.id)
+
+
+@router.callback_query(F.data.startswith("pv:"))
+async def cb_peer_vote(callback: CallbackQuery, db: Database, config: Config) -> None:
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        await callback.answer()
+        return
+
+    _, tier_key, target = callback.data.split(":", 2)
+    chosen = peer.TIER_BY_KEY.get(tier_key)
+    if chosen is None or target == f"u:{user.id}":
+        await callback.answer("Не получилось", show_alert=True)
+        return
+
+    used = await db.peer_votes_since(
+        user.id,
+        datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+    )
+    if used >= peer.DAILY_VOTE_LIMIT:
+        await callback.answer("Лимит на сегодня", show_alert=True)
+        return
+
+    fresh = await db.peer_vote(user.id, target, chosen.key, chosen.score)
+    if fresh:
+        with contextlib.suppress(Exception):
+            await db.award_xp(user.id, f"peervote:{target}", 1)
+
+    await callback.answer(
+        texts.peer_voted(chosen.title, max(0, peer.DAILY_VOTE_LIMIT - used - 1))
+    )
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+    await _send_next_card(callback.message, db, user.id)
+
+
+@router.callback_query(F.data.startswith("pr:"))
+async def cb_peer_report(callback: CallbackQuery, config: Config) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+    target = callback.data.split(":", 1)[1]
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.peer_report_reasons(target)
+        )
+
+
+@router.callback_query(F.data.startswith("prr:"))
+async def cb_peer_reason(
+    callback: CallbackQuery, db: Database, config: Config
+) -> None:
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        await callback.answer()
+        return
+
+    _, reason, target = callback.data.split(":", 2)
+    report_id = await db.peer_add_report(user.id, target, reason)
+
+    from webapp.server import notify_report
+
+    await notify_report(callback.message.bot, db, config, report_id, user.id, target, reason)
+    await callback.answer(texts.PEER_REPORT_SENT, show_alert=True)
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+    await _send_next_card(callback.message, db, user.id)
+
+
+# ─────────────────────────── модерация жалоб ───────────────────────────────
+
+
+@router.callback_query(F.data.startswith("rep:"))
+async def cb_moderate(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """Решение по жалобе. Доступно только владельцу."""
+    user = callback.from_user
+    if not config.admin_ids or not config.is_admin(user.id):
+        await callback.answer("Только для модератора", show_alert=True)
+        return
+
+    _, action, report_id, target = callback.data.split(":", 3)
+    owner_id: int | None = None
+    if target.startswith("u:"):
+        with contextlib.suppress(ValueError):
+            owner_id = int(target[2:])
+
+    if action == "keep":
+        await db.peer_close_report(int(report_id), "kept")
+        await callback.answer("Оставлено")
+    elif action == "del" and owner_id:
+        await db.peer_set_status(owner_id, "banned", None, "Нарушение правил")
+        await db.peer_close_report(int(report_id), "banned")
+        with contextlib.suppress(TelegramAPIError):
+            await callback.message.bot.send_message(owner_id, texts.PEER_BANNED_NOTICE)
+        await callback.answer("Анкета удалена", show_alert=True)
+    elif action == "hide" and owner_id:
+        until = datetime.now(timezone.utc) + timedelta(hours=peer.HIDE_HOURS)
+        note = "Жалоба подтверждена модератором."
+        await db.peer_set_status(owner_id, "hidden", until, note)
+        await db.peer_close_report(int(report_id), "hidden")
+        with contextlib.suppress(TelegramAPIError):
+            await callback.message.bot.send_message(
+                owner_id, texts.peer_hidden_notice(peer.HIDE_HOURS, note)
+            )
+        await callback.answer("Скрыто на 24 часа", show_alert=True)
+    else:
+        await callback.answer("Снимок из папки — анкеты нет", show_alert=True)
+        await db.peer_close_report(int(report_id), "kept")
+
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+
+# ───────────────── адресная выдача попыток ─────────────────────────────────
+
+
+@router.message(Command("give"))
+async def cmd_give(message: Message, db: Database, config: Config) -> None:
+    """/give <id|@username> <n> — попытки конкретному человеку."""
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer(texts.GIVE_USAGE)
+        return
+
+    who_raw, amount_raw = parts[1], parts[2]
+    try:
+        amount = int(amount_raw)
+    except ValueError:
+        await message.answer(texts.GIVE_USAGE)
+        return
+
+    if not 1 <= amount <= 50:
+        await message.answer(texts.GIVE_USAGE)
+        return
+
+    target_id: int | None = None
+    if who_raw.lstrip("-").isdigit():
+        target_id = int(who_raw)
+    else:
+        target_id = await db.user_by_username(who_raw.lstrip("@"))
+
+    if target_id is None:
+        await message.answer(texts.GIVE_NOT_FOUND)
+        return
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    # Ключ содержит дату и порядковый номер: те же записи, что и у покупок,
+    # поэтому подарок сам исчезает вместе со сбросом лимита в полночь.
+    already = await db.count_purchases(target_id, f"scan:{today}:")
+    for index in range(amount):
+        await db.purchase(target_id, f"scan:{today}:{already + index + 1}", 0)
+
+    await message.answer(texts.give_done(who_raw, amount))
+    with contextlib.suppress(TelegramAPIError):
+        await message.bot.send_message(
+            target_id,
+            f"🎁 Тебе начислено <b>{amount}</b> дополнительных отчётов на сегодня.",
+        )
+
+
 @router.message(F.photo)
 async def handle_photo(
     message: Message, db: Database, config: Config, demo: DemoState
@@ -416,8 +769,18 @@ async def handle_photo(
         return
 
     if await demo.is_active(user.id):
-        await _demo_report(message, user, config)
+        # Подпись различает два сценария съёмки: с ней снимаем карточку
+        # «тебя оценили», без неё — обычный разбор по фото.
+        if (message.caption or "").strip():
+            await _demo_peer_card(message, db, user)
+        else:
+            await _demo_report(message, user, config)
         return
+
+    # Анкета режима оценок: фото с подписью «имя, возраст»
+    if _peer_open(config, user.id) and (message.caption or "").strip():
+        if await _peer_save_from_message(message, db, user):
+            return
 
     if config.webapp_url:
         await message.answer(
@@ -426,6 +789,75 @@ async def handle_photo(
         )
     else:
         await message.answer(texts.PHOTO_NO_APP)
+
+
+async def _demo_peer_card(message: Message, db: Database, user: User) -> None:
+    """
+    Режим съёмки для раздела оценок: показывает, как выглядит уведомление
+    «тебя оценили». Ник берётся из подписи к фото, оценка — кнопкой.
+    """
+    nick = texts.safe((message.caption or "").strip()[:32])
+    photo_id = message.photo[-1].file_id
+
+    # Callback не вмещает file_id целиком, поэтому кладём его в настройки.
+    await db.set_setting(
+        f"demopeer:{user.id}", json.dumps({"photo": photo_id, "nick": nick})
+    )
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    rows = []
+    line = []
+    for tier in peer.PEER_TIERS:
+        line.append(
+            InlineKeyboardButton(
+                text=f"{tier.emoji} {tier.title}", callback_data=f"dpc:{tier.key}"
+            )
+        )
+        if len(line) == 2:
+            rows.append(line)
+            line = []
+    if line:
+        rows.append(line)
+
+    await message.answer(
+        texts.peer_demo_ask(nick),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("dpc:"))
+async def cb_demo_peer_card(
+    callback: CallbackQuery, db: Database, config: Config, demo: DemoState
+) -> None:
+    user = callback.from_user
+    if callback.message is None or not await demo.is_active(user.id):
+        await callback.answer()
+        return
+
+    tier = peer.TIER_BY_KEY.get(callback.data.split(":", 1)[1])
+    raw = await db.get_setting(f"demopeer:{user.id}")
+    if tier is None or not raw:
+        await callback.answer("Отправь фото заново", show_alert=True)
+        return
+
+    saved = json.loads(raw)
+    await callback.answer()
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+
+    me = await callback.message.bot.get_me()
+    await callback.message.answer_photo(
+        saved["photo"],
+        caption=texts.peer_demo_card(saved["nick"], tier.title),
+        reply_markup=keyboards.peer_demo_card(me.username or ""),
+    )
+
+
+@router.callback_query(F.data == "demo:rate")
+async def cb_demo_rate(callback: CallbackQuery) -> None:
+    """Кнопка на карточке съёмки: живого действия за ней нет."""
+    await callback.answer("Открой приложение, чтобы оценить в ответ")
 
 
 async def _demo_report(message: Message, user: User, config: Config) -> None:

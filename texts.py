@@ -615,3 +615,166 @@ def strict_set(value: float) -> str:
         f"{abs(value):.1f} балла.\n"
         "<i>Применяется сразу, в боте и в приложении.</i>"
     )
+
+
+# ═══════════════════ РЕЖИМ ВЗАИМНЫХ ОЦЕНОК ═════════════════════════════════
+
+
+def peer_intro(state: dict) -> str:
+    from peer import CONSENT_TEXT, PEER_MIN_AGE
+
+    profile = state.get("profile")
+    if not profile:
+        return (
+            "👥 <b>ВЗАИМНЫЕ ОЦЕНКИ</b>\n"
+            f"{LINE}\n"
+            "Выкладываешь своё фото — оцениваешь чужие, тебя оценивают в ответ.\n"
+            f"{LINE}\n"
+            f"{safe(CONSENT_TEXT)}\n"
+            f"{LINE}\n"
+            "<b>Как создать анкету:</b>\n"
+            "Отправь фото, а в подписи к нему — имя и возраст через запятую:\n"
+            "<code>Макс, 19</code>\n\n"
+            f"<i>Отправляя фото, ты подтверждаешь, что тебе есть "
+            f"{PEER_MIN_AGE}, что на снимке ты сам и что согласен с правилами.</i>"
+        )
+
+    if profile["status"] == "hidden":
+        until = (profile.get("hidden_until") or "")[:16].replace("T", " ")
+        return (
+            "🙈 <b>Анкета скрыта</b>\n"
+            f"{LINE}\n"
+            f"{safe(profile.get('hidden_note') or 'Решение модератора.')}\n"
+            f"Скрыта до <b>{safe(until)}</b>\n"
+            f"{LINE}\n"
+            "<i>Чтобы вернуться, отправь новое фото с подписью "
+            "«имя, возраст».</i>"
+        )
+
+    if profile["status"] == "banned":
+        return "🚫 <b>Анкета заблокирована.</b>\nВопросы — в поддержку."
+
+    lines = [
+        "👥 <b>ТВОЯ АНКЕТА</b>",
+        LINE,
+        f"Имя: <b>{safe(profile['name'])}</b>",
+        f"Возраст: <b>{profile['age']}</b>",
+        f"Оценок получено: <b>{profile['votes']}</b>",
+    ]
+    if profile.get("tier"):
+        lines.append(f"Средняя: <b>{profile['average']}</b> · {profile['tier']}")
+    else:
+        lines.append("<i>Средняя появится после трёх оценок</i>")
+
+    lines += [
+        LINE,
+        f"Оценок можно поставить сегодня: <b>{state['votes_left']}</b>",
+        "",
+        "/rate — оценивать анкеты",
+        "/peer_delete — удалить анкету",
+        "",
+        "<i>Новое фото с подписью «имя, возраст» заменит текущее.</i>",
+    ]
+    return "\n".join(lines)
+
+
+PEER_BAD_CAPTION = (
+    "❌ Не разобрал подпись.\n"
+    "Нужно имя и возраст через запятую: <code>Макс, 19</code>"
+)
+
+PEER_SAVED = (
+    "✅ <b>Анкета сохранена</b>\n"
+    "Теперь её увидят другие. Оценивай чужие — /rate"
+)
+
+PEER_NO_PROFILE = (
+    "Сначала своя анкета: отправь фото с подписью <code>Имя, возраст</code>.\n"
+    "<i>Так честнее — оценивают те, кого можно оценить в ответ.</i>"
+)
+
+PEER_EMPTY = (
+    "На сегодня анкеты закончились.\n"
+    "<i>Загляни позже — новые появляются постоянно.</i>"
+)
+
+PEER_DELETED = "🗑 Анкета и фото удалены."
+
+PEER_REPORT_SENT = "🚩 Жалоба отправлена модератору. Спасибо."
+
+
+def peer_card(name: str, age: int) -> str:
+    if not name:
+        return "Оцени по шкале ниже 👇"
+    who = f"<b>{safe(name)}</b>"
+    if age:
+        who += f", {age}"
+    return f"{who}\n\nОцени по шкале ниже 👇"
+
+
+def peer_voted(tier_title: str, left: int) -> str:
+    return f"Оценка «{safe(tier_title)}» учтена. Осталось сегодня: {left}"
+
+
+def peer_hidden_notice(hours: int, note: str) -> str:
+    return (
+        "🙈 <b>Твоя анкета скрыта</b>\n"
+        f"{LINE}\n"
+        f"{safe(note)}\n"
+        f"Скрытие снимается через <b>{hours} ч</b>.\n"
+        f"{LINE}\n"
+        "<i>Чтобы вернуться, потребуется загрузить новое фото.</i>"
+    )
+
+
+PEER_BANNED_NOTICE = (
+    "🚫 <b>Твоя анкета удалена модератором</b>\n"
+    "Причина — нарушение правил режима оценок."
+)
+
+
+def peer_admin_stats(data: dict) -> str:
+    return (
+        "👥 <b>РЕЖИМ ОЦЕНОК</b>\n"
+        f"{LINE}\n"
+        f"Анкет всего: <b>{data['profiles']}</b>\n"
+        f"Активных: <b>{data['active']}</b>\n"
+        f"Скрыто: <b>{data['hidden']}</b> · заблокировано: <b>{data['banned']}</b>\n"
+        f"Оценок выставлено: <b>{data['votes']}</b>\n"
+        f"Открытых жалоб: <b>{data['open_reports']}</b>"
+    )
+
+
+GIVE_USAGE = (
+    "🎯 <b>ПОПЫТКИ АДРЕСНО</b>\n"
+    "<code>/give 630046207 5</code> — по ID\n"
+    "<code>/give @username 5</code> — по юзернейму\n"
+    "<i>От 1 до 50. Юзернейм работает, если человек уже писал боту.</i>"
+)
+
+
+def give_done(who: str, amount: int) -> str:
+    return (
+        f"🎯 <b>Выдано {amount} попыток</b>\n"
+        f"Кому: {safe(who)}\n"
+        "<i>Действуют до полуночи по UTC.</i>"
+    )
+
+
+GIVE_NOT_FOUND = (
+    "❌ Не нашёл такого пользователя.\n"
+    "<i>По юзернейму получится, только если он уже писал боту. "
+    "Надёжнее — по числовому ID.</i>"
+)
+
+
+def peer_demo_ask(nick: str) -> str:
+    return (
+        f"🎬 <b>Режим съёмки</b>\n"
+        f"Ник: <b>{safe(nick)}</b>\n"
+        "Выбери оценку, которую он тебе «поставил»:"
+    )
+
+
+def peer_demo_card(nick: str, tier_title: str) -> str:
+    return f"<b>{safe(nick)}</b> оценил(а) тебя на <b>{safe(tier_title)}</b>"

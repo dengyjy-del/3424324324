@@ -21,7 +21,6 @@ const state = {
   theme: "classic",
   cardTheme: 0,
   refCode: "",
-  guides: [],
 };
 
 /* ── Служебное ───────────────────────────────────────────── */
@@ -114,6 +113,7 @@ function initTabs() {
       showScreen(button.dataset.screen);
       if (button.dataset.screen === "s-today") loadToday();
       if (button.dataset.screen === "s-friends") loadFriends();
+      if (button.dataset.screen === "s-peer") loadPeer();
       if (button.dataset.screen === "s-profile") {
         loadProfile();
         // Размеры считаются только на видимом экране, иначе подложка
@@ -502,7 +502,6 @@ function enterApp() {
   showScreen("s-today");
   initTabs();
   loadToday();
-  loadGuides();
 }
 
 /* ── Скан ────────────────────────────────────────────────── */
@@ -1210,6 +1209,247 @@ function initThemes() {
   });
 }
 
+/* ══════════════════ ВЗАИМНЫЕ ОЦЕНКИ ══════════════════ */
+
+const peerState = { deck: [], current: null, cfg: null, photo: null };
+
+/** Ужимаем сильнее, чем для скана: снимок хранится на сервере. */
+async function shrinkPhoto(file) {
+  const bitmap = await createImageBitmap(file);
+  const side = 760;
+  const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return new Promise((done) =>
+    canvas.toBlob((blob) => done(blob), "image/jpeg", 0.82)
+  );
+}
+
+function peerShow(id) {
+  ["pr-consent", "pr-form", "pr-mine", "pr-deck", "pr-empty"].forEach((key) =>
+    $(key).classList.toggle("hidden", key !== id && !(id === "deck+mine" && key === "pr-mine"))
+  );
+}
+
+async function loadPeer() {
+  let state;
+  try {
+    state = await api("/api/peer/state");
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+
+  peerState.cfg = state;
+  $("pr-consent-text").textContent = state.consent_text;
+  $("pr-agree-label").textContent =
+    `Мне есть ${state.min_age}, на фото я, и я согласен с правилами`;
+
+  const profile = state.profile;
+
+  if (!profile) {
+    peerShow("pr-consent");
+    return;
+  }
+
+  if (profile.status === "hidden") {
+    peerShow("pr-mine");
+    const until = (profile.hidden_until || "").slice(0, 16).replace("T", " ");
+    $("pr-mine").innerHTML =
+      `<h3>🙈 Анкета скрыта</h3>` +
+      `<p class="tiny" style="margin-top:6px">${profile.hidden_note || ""}</p>` +
+      `<p class="tiny" style="margin-top:4px">До ${until}</p>` +
+      `<p class="tiny" style="margin-top:10px;color:var(--ink-3)">` +
+      `Чтобы вернуться, загрузи новое фото.</p>` +
+      `<button class="btn btn-glass" id="pr-again" style="margin-top:12px">` +
+      `Загрузить новое фото</button>`;
+    $("pr-again").addEventListener("click", () => {
+      $("pr-name").value = profile.name;
+      $("pr-age").value = profile.age;
+      peerShow("pr-form");
+    });
+    return;
+  }
+
+  if (profile.status === "banned") {
+    peerShow("pr-mine");
+    $("pr-mine").innerHTML =
+      `<h3>🚫 Анкета заблокирована</h3>` +
+      `<p class="tiny" style="margin-top:6px">Нарушение правил режима.</p>`;
+    return;
+  }
+
+  // Анкета активна: показываем итог и очередь
+  $("pr-mine").classList.remove("hidden");
+  $("pr-mine").className = "glass pad pr-status";
+  $("pr-mine").innerHTML =
+    `<div style="min-width:0"><h3>${profile.name}, ${profile.age}</h3>` +
+    `<p class="tiny" style="margin-top:3px">` +
+    (profile.tier
+      ? `${profile.votes} оценок · ${profile.tier}`
+      : `${profile.votes} из 3 оценок до результата`) +
+    `</p></div>` +
+    `<span class="pr-status-value">${profile.tier ? profile.average : "—"}</span>`;
+
+  await loadDeck();
+}
+
+async function loadDeck() {
+  try {
+    const data = await api("/api/peer/next");
+    peerState.deck = data.cards || [];
+  } catch (error) {
+    if (error.message.includes("анкета")) return loadPeer();
+    toast(error.message);
+    return;
+  }
+  showNextCard();
+}
+
+function showNextCard() {
+  $("pr-form").classList.add("hidden");
+  $("pr-consent").classList.add("hidden");
+
+  const card = peerState.deck.shift();
+  peerState.current = card || null;
+
+  $("pr-deck").classList.toggle("hidden", !card);
+  $("pr-empty").classList.toggle("hidden", Boolean(card));
+  if (!card) return;
+
+  $("pr-card-img").src = card.photo;
+  $("pr-card-name").textContent = card.name
+    ? `${card.name}${card.age ? ", " + card.age : ""}`
+    : "";
+
+  $("pr-tiers").innerHTML = (peerState.cfg?.tiers || [])
+    .map((t) => `<button data-tier="${t.key}">${t.emoji} ${t.title}</button>`)
+    .join("");
+
+  document.querySelectorAll("#pr-tiers [data-tier]").forEach((button) =>
+    button.addEventListener("click", () => votePeer(button.dataset.tier))
+  );
+}
+
+async function votePeer(tier) {
+  const card = peerState.current;
+  if (!card) return;
+  haptic("medium");
+
+  const body = new FormData();
+  body.append("target", card.target);
+  body.append("tier", tier);
+
+  try {
+    const result = await api("/api/peer/vote", { method: "POST", body });
+    $("pr-left").textContent = `Осталось оценок сегодня: ${result.votes_left}`;
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+
+  if (peerState.deck.length) showNextCard();
+  else loadDeck();
+}
+
+function initPeer() {
+  $("pr-agree").addEventListener("change", (event) => {
+    $("pr-accept").disabled = !event.target.checked;
+  });
+
+  $("pr-accept").addEventListener("click", () => {
+    haptic();
+    peerShow("pr-form");
+  });
+
+  $("pr-photo").addEventListener("click", () => $("pr-file").click());
+
+  $("pr-file").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      peerState.photo = await shrinkPhoto(file);
+      $("pr-photo-img").src = URL.createObjectURL(peerState.photo);
+      $("pr-photo").classList.add("filled");
+    } catch (_) {
+      toast("Не удалось открыть фото");
+    }
+  });
+
+  $("pr-save").addEventListener("click", async () => {
+    haptic("medium");
+    const body = new FormData();
+    body.append("name", $("pr-name").value || "");
+    body.append("age", $("pr-age").value || "0");
+    body.append("accepted", "1");
+    if (peerState.photo) body.append("photo", peerState.photo, "me.jpg");
+
+    const button = $("pr-save");
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner"></span>';
+
+    try {
+      await api("/api/peer/profile", { method: "POST", body });
+      notifySuccess();
+      peerState.photo = null;
+      $("pr-photo").classList.remove("filled");
+      await loadPeer();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Сохранить анкету";
+    }
+  });
+
+  $("pr-report").addEventListener("click", () => {
+    if (!peerState.current) return;
+    haptic("medium");
+    $("pr-reasons").innerHTML = (peerState.cfg?.reasons || [])
+      .map(
+        (r) => `<button class="btn btn-glass" data-reason="${r.key}">${r.title}</button>`
+      )
+      .join("");
+    document.querySelectorAll("#pr-reasons [data-reason]").forEach((button) =>
+      button.addEventListener("click", () => sendReport(button.dataset.reason))
+    );
+    $("pr-veil").classList.add("open");
+    $("pr-sheet").classList.add("open");
+  });
+
+  $("pr-veil").addEventListener("click", closeReportSheet);
+}
+
+function closeReportSheet() {
+  $("pr-veil").classList.remove("open");
+  $("pr-sheet").classList.remove("open");
+}
+
+async function sendReport(reason) {
+  const card = peerState.current;
+  closeReportSheet();
+  if (!card) return;
+
+  const body = new FormData();
+  body.append("target", card.target);
+  body.append("reason", reason);
+
+  try {
+    await api("/api/peer/report", { method: "POST", body });
+    notifySuccess();
+    toast("Жалоба отправлена модератору");
+  } catch (error) {
+    toast(error.message);
+  }
+
+  // Пожаловался — значит смотреть дальше эту анкету не нужно
+  if (peerState.deck.length) showNextCard();
+  else loadDeck();
+}
+
 /* ── Профиль ─────────────────────────────────────────────── */
 
 function paintStats(stats, user) {
@@ -1377,125 +1617,6 @@ function initSegments() {
   });
 }
 
-/* ── Гайды ───────────────────────────────────────────────── */
-
-const CHEVRON =
-  '<svg class="guide-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
-  'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M9 18l6-6-6-6"/></svg>';
-
-function renderBlock(block) {
-  const heading = block.heading ? `<h3>${block.heading}</h3>` : "";
-  if (block.list) {
-    return `<div class="guide-block">${heading}<ul>${block.list
-      .map((item) => `<li>${item}</li>`)
-      .join("")}</ul></div>`;
-  }
-  return `<div class="guide-block">${heading}<p>${block.text}</p></div>`;
-}
-
-async function buyGuide(id, price) {
-  haptic("medium");
-  const body = new FormData();
-  body.append("guide_id", id);
-
-  try {
-    await api("/api/buy", { method: "POST", body });
-    notifySuccess();
-    toast("Гайд открыт");
-    await loadGuides();
-    loadToday();
-  } catch (error) {
-    toast(error.message);
-  }
-}
-
-function renderShop(shop, balance, unlimited) {
-  $("shop-balance").innerHTML =
-    `<div style="min-width:0"><h3>Баланс</h3>` +
-    `<p class="tiny" style="margin-top:3px">Отмечай привычки каждый день — ` +
-    `гайд копится примерно за неделю</p></div>` +
-    `<span class="xp-amount">${unlimited ? "∞" : balance}</span>`;
-
-  $("shop-list").innerHTML = shop
-    .map((guide) => {
-      const affordable = unlimited || balance >= guide.price;
-      const button = guide.owned
-        ? '<span class="shop-price owned">Открыт</span>'
-        : `<button class="shop-price${affordable ? "" : " locked"}" ` +
-          `data-buy="${guide.id}" data-price="${guide.price}">${guide.price} XP</button>`;
-
-      const body = guide.owned
-        ? `<div class="guide-body"><div class="guide-inner"><div class="guide-content">` +
-          `${guide.blocks.map(renderBlock).join("")}</div></div></div>`
-        : "";
-
-      return `<article class="glass guide shop-item" data-id="${guide.id}">
-          <div class="shop-head">
-            <div class="guide-emoji">${guide.emoji}</div>
-            <div class="guide-meta">
-              <h2>${guide.title}</h2>
-              <p class="tiny">${guide.tagline}</p>
-            </div>
-            ${button}
-          </div>${body}
-        </article>`;
-    })
-    .join("");
-
-  document.querySelectorAll("[data-buy]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      buyGuide(button.dataset.buy, Number(button.dataset.price));
-    });
-  });
-
-  // Купленный гайд раскрывается по нажатию, как и бесплатный
-  document.querySelectorAll(".shop-item").forEach((item) => {
-    if (!item.querySelector(".guide-body")) return;
-    item.querySelector(".shop-head").addEventListener("click", () =>
-      item.classList.toggle("open")
-    );
-  });
-}
-
-async function loadGuides() {
-  let data;
-  try {
-    data = await api("/api/guides");
-    state.guides = data.guides;
-    renderShop(data.shop || [], data.balance || 0, data.unlimited);
-  } catch (error) {
-    return;
-  }
-
-  $("guides-list").innerHTML = state.guides
-    .map(
-      (guide) => `
-      <article class="glass guide" data-id="${guide.id}">
-        <div class="guide-head">
-          <div class="guide-emoji">${guide.emoji}</div>
-          <div class="guide-meta">
-            <h2>${guide.title}</h2>
-            <p class="tiny">${guide.tagline} · ${guide.read_minutes} мин</p>
-          </div>
-          ${CHEVRON}
-        </div>
-        <div class="guide-body"><div class="guide-inner">
-          <div class="guide-content">${guide.blocks.map(renderBlock).join("")}</div>
-        </div></div>
-      </article>`
-    )
-    .join("");
-
-  document.querySelectorAll(".guide-head").forEach((head) => {
-    head.addEventListener("click", () => {
-      haptic();
-      head.parentElement.classList.toggle("open");
-    });
-  });
-}
-
 /* ── Старт ───────────────────────────────────────────────── */
 
 async function boot() {
@@ -1525,6 +1646,7 @@ async function boot() {
   initReferral();
   initLabeling();
   initFeedback();
+  initPeer();
   initThemes();
   initScan();
   initSegments();
@@ -1543,7 +1665,10 @@ async function boot() {
     state.channel = session.channel || state.channel;
     state.brand = session.brand || state.brand;
     // Вкладка разметки существует только для владельца
-    if (session.is_admin) $("tab-label").classList.remove("hidden");
+    if (session.is_admin) {
+      $("tab-label").classList.remove("hidden");
+      $("tab-peer").classList.remove("hidden");
+    }
     applyTheme(session.theme || "classic");
     state.modelVersion = session.model_version || "";
     if (session.is_admin && state.modelVersion) {

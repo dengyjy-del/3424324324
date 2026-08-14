@@ -1633,3 +1633,131 @@ h3 {
   letter-spacing: -0.02em;
   flex-shrink: 0;
 }
+
+/* ══════════════════ ВЗАИМНЫЕ ОЦЕНКИ ══════════════════ */
+
+.pr-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.pr-check input {
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  accent-color: #5b4bff;
+}
+
+/* Превью своего фото при заполнении анкеты */
+.pr-photo {
+  position: relative;
+  margin-top: 11px;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--stroke-bright);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.pr-photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+}
+
+.pr-photo.filled img { display: block; }
+.pr-photo.filled span { display: none; }
+
+.pr-photo span {
+  font-size: 13px;
+  color: var(--ink-3);
+  padding: 0 20px;
+  text-align: center;
+}
+
+/* Карточка на оценку */
+.pr-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: var(--void-2);
+}
+
+.pr-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pr-card-veil {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 30px 16px 14px;
+  background: linear-gradient(transparent, rgba(4, 5, 9, 0.85));
+  font-size: 16px;
+  font-weight: 620;
+}
+
+/* Кнопки шкалы */
+.pr-tiers {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pr-tiers button {
+  padding: 14px 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--stroke);
+  background: var(--glass-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: transform 0.22s var(--spring), background 0.2s;
+}
+
+.pr-tiers button:active {
+  transform: scale(0.94);
+  background: rgba(255, 255, 255, 0.13);
+}
+
+/* Последняя кнопка занимает строку целиком, если их нечётное число */
+.pr-tiers button:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.pr-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pr-status-value {
+  margin-left: auto;
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, var(--aura-indigo), var(--aura-rose));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

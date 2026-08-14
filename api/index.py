@@ -172,6 +172,8 @@ try:
         BotCommand(command="stats", description="📊 Моя статистика"),
         BotCommand(command="about", description="ℹ️ О боте"),
         BotCommand(command="help", description="📖 Справка"),
+        BotCommand(command="peer", description="👥 Взаимные оценки"),
+        BotCommand(command="rate", description="⭐ Оценивать анкеты"),
     ]
 
 except Exception as error:  # noqa: BLE001 — здесь ловим осознанно

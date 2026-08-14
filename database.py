@@ -150,6 +150,13 @@ class BaseDatabase(ABC):
     async def label_stats(self) -> dict: ...
 
     @abstractmethod
+    async def remember_username(self, user_id: int, username: str) -> None:
+        """Запоминает @username, чтобы владелец мог адресовать команды по нему."""
+
+    @abstractmethod
+    async def user_by_username(self, username: str) -> int | None: ...
+
+    @abstractmethod
     async def set_theme(self, user_id: int, theme: str) -> None: ...
 
     @abstractmethod
@@ -162,6 +169,61 @@ class BaseDatabase(ABC):
     async def get_setting(self, key: str) -> str | None: ...
 
     @abstractmethod
+
+    # ───────────────────── режим взаимных оценок ──────────────────────
+
+    @abstractmethod
+    async def peer_save_profile(
+        self, user_id: int, name: str, age: int, photo: bytes | None,
+        photo_key: str | None, terms_version: str,
+    ) -> None:
+        """Создаёт или обновляет анкету. Новое фото затирает предыдущее."""
+
+    @abstractmethod
+    async def peer_profile(self, user_id: int) -> dict | None: ...
+
+    @abstractmethod
+    async def peer_photo(self, user_id: int) -> bytes | None: ...
+
+    @abstractmethod
+    async def peer_delete(self, user_id: int) -> None: ...
+
+    @abstractmethod
+    async def peer_set_status(
+        self, user_id: int, status: str, hidden_until: datetime | None,
+        note: str | None,
+    ) -> None: ...
+
+    @abstractmethod
+    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
+        """Анкеты, которые зритель ещё не оценивал."""
+
+    @abstractmethod
+    async def peer_vote(
+        self, voter_id: int, target: str, tier: str, score: float
+    ) -> bool:
+        """False, если этот зритель уже оценивал эту цель."""
+
+    @abstractmethod
+    async def peer_seen(self, viewer_id: int) -> set[str]: ...
+
+    @abstractmethod
+    async def peer_votes_since(self, voter_id: int, since: datetime) -> int: ...
+
+    @abstractmethod
+    async def peer_result(self, target: str) -> dict: ...
+
+    @abstractmethod
+    async def peer_add_report(
+        self, reporter_id: int, target: str, reason: str
+    ) -> int: ...
+
+    @abstractmethod
+    async def peer_close_report(self, report_id: int, status: str) -> None: ...
+
+    @abstractmethod
+    async def peer_stats(self) -> dict: ...
+
     async def diagnose_labels(self) -> dict:
         """Прямая проверка таблицы разметки: что реально лежит в базе."""
 
@@ -222,7 +284,8 @@ CREATE TABLE IF NOT EXISTS users (
     onboarded_at  TEXT,
     ref_code      TEXT UNIQUE,
     referred_by   INTEGER,
-    theme         TEXT
+    theme         TEXT,
+    username      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -267,6 +330,45 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Анкеты режима взаимных оценок. Фото лежит здесь же: показать его другим
+-- иначе нечем. Хранится только текущее — новое затирает старое.
+CREATE TABLE IF NOT EXISTS peer_profiles (
+    user_id      INTEGER PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    age          INTEGER NOT NULL,
+    photo        BLOB,
+    photo_key    TEXT,
+    status       TEXT    NOT NULL DEFAULT 'active',
+    hidden_until TEXT,
+    hidden_note  TEXT,
+    terms_version TEXT,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL
+);
+
+-- Ключ (voter_id, target) не даёт показать одну анкету дважды.
+CREATE TABLE IF NOT EXISTS peer_votes (
+    voter_id   INTEGER NOT NULL,
+    target     TEXT    NOT NULL,
+    tier       TEXT    NOT NULL,
+    score      REAL    NOT NULL,
+    created_at TEXT    NOT NULL,
+    PRIMARY KEY (voter_id, target)
+);
+
+CREATE TABLE IF NOT EXISTS peer_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id INTEGER NOT NULL,
+    target      TEXT    NOT NULL,
+    reason      TEXT,
+    status      TEXT    NOT NULL DEFAULT 'open',
+    created_at  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
+CREATE INDEX IF NOT EXISTS idx_peer_status ON peer_profiles(status);
+
 
 CREATE TABLE IF NOT EXISTS xp_events (
     user_id    INTEGER NOT NULL,
@@ -322,6 +424,7 @@ class SQLiteDatabase(BaseDatabase):
             ("ref_code", "ALTER TABLE users ADD COLUMN ref_code TEXT"),
             ("referred_by", "ALTER TABLE users ADD COLUMN referred_by INTEGER"),
             ("theme", "ALTER TABLE users ADD COLUMN theme TEXT"),
+            ("username", "ALTER TABLE users ADD COLUMN username TEXT"),
         ):
             if column not in columns:
                 await self.conn.execute(ddl)
@@ -609,6 +712,20 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+    async def remember_username(self, user_id: int, username: str) -> None:
+        await self.ensure_user(user_id)
+        await self.conn.execute(
+            "UPDATE users SET username = ? WHERE user_id = ?", (username, user_id)
+        )
+        await self.conn.commit()
+
+    async def user_by_username(self, username: str) -> int | None:
+        async with self.conn.execute(
+            "SELECT user_id FROM users WHERE LOWER(username) = LOWER(?)", (username,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["user_id"]) if row else None
+
     async def set_theme(self, user_id: int, theme: str) -> None:
         await self.ensure_user(user_id)
         await self.conn.execute(
@@ -640,6 +757,210 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             row = await cursor.fetchone()
         return row["value"] if row else None
+
+
+    # ───────────────────── режим взаимных оценок ──────────────────────
+
+    async def peer_save_profile(
+        self, user_id: int, name: str, age: int, photo: bytes | None,
+        photo_key: str | None, terms_version: str,
+    ) -> None:
+        await self.ensure_user(user_id)
+        now = _now_iso()
+        if photo is None:
+            await self.conn.execute(
+                """
+                INSERT INTO peer_profiles
+                       (user_id, name, age, terms_version, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                       name = excluded.name,
+                       age = excluded.age,
+                       terms_version = excluded.terms_version,
+                       updated_at = excluded.updated_at
+                """,
+                (user_id, name, age, terms_version, now, now),
+            )
+        else:
+            await self.conn.execute(
+                """
+                INSERT INTO peer_profiles
+                       (user_id, name, age, photo, photo_key, status,
+                        hidden_until, hidden_note, terms_version,
+                        created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, 'active', NULL, NULL, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                       name = excluded.name,
+                       age = excluded.age,
+                       photo = excluded.photo,
+                       photo_key = excluded.photo_key,
+                       status = 'active',
+                       hidden_until = NULL,
+                       hidden_note = NULL,
+                       terms_version = excluded.terms_version,
+                       updated_at = excluded.updated_at
+                """,
+                (user_id, name, age, photo, photo_key, terms_version, now, now),
+            )
+        await self.conn.commit()
+
+    async def peer_profile(self, user_id: int) -> dict | None:
+        async with self.conn.execute(
+            """
+            SELECT user_id, name, age, photo_key, status, hidden_until,
+                   hidden_note, terms_version
+              FROM peer_profiles WHERE user_id = ?
+            """,
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def peer_photo(self, user_id: int) -> bytes | None:
+        async with self.conn.execute(
+            "SELECT photo FROM peer_profiles WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return bytes(row["photo"]) if row and row["photo"] else None
+
+    async def peer_delete(self, user_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM peer_profiles WHERE user_id = ?", (user_id,)
+        )
+        await self.conn.commit()
+
+    async def peer_set_status(
+        self, user_id: int, status: str, hidden_until: datetime | None,
+        note: str | None,
+    ) -> None:
+        # Фото стираем сразу: скрытая анкета не должна оставлять снимок
+        # в базе дольше, чем нужно, а после снятия скрытия его загрузят заново.
+        await self.conn.execute(
+            """
+            UPDATE peer_profiles
+               SET status = ?, hidden_until = ?, hidden_note = ?,
+                   photo = NULL, photo_key = NULL, updated_at = ?
+             WHERE user_id = ?
+            """,
+            (
+                status,
+                hidden_until.isoformat(timespec="seconds") if hidden_until else None,
+                note,
+                _now_iso(),
+                user_id,
+            ),
+        )
+        await self.conn.commit()
+
+    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
+        async with self.conn.execute(
+            """
+            SELECT p.user_id, p.name, p.age, p.photo_key
+              FROM peer_profiles p
+             WHERE p.status = 'active'
+               AND p.photo IS NOT NULL
+               AND p.user_id != ?
+               AND NOT EXISTS (
+                     SELECT 1 FROM peer_votes v
+                      WHERE v.voter_id = ? AND v.target = 'u:' || p.user_id
+                   )
+             ORDER BY RANDOM() LIMIT ?
+            """,
+            (viewer_id, viewer_id, limit),
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def peer_vote(
+        self, voter_id: int, target: str, tier: str, score: float
+    ) -> bool:
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO peer_votes
+                   (voter_id, target, tier, score, created_at)
+                 VALUES (?, ?, ?, ?, ?)
+            """,
+            (voter_id, target, tier, score, _now_iso()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def peer_seen(self, viewer_id: int) -> set[str]:
+        async with self.conn.execute(
+            "SELECT target FROM peer_votes WHERE voter_id = ?", (viewer_id,)
+        ) as cursor:
+            return {r["target"] for r in await cursor.fetchall()}
+
+    async def peer_votes_since(self, voter_id: int, since: datetime) -> int:
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM peer_votes WHERE voter_id = ? AND created_at >= ?",
+            (voter_id, since.isoformat(timespec="seconds")),
+        ) as cursor:
+            return int((await cursor.fetchone())["n"])
+
+    async def peer_result(self, target: str) -> dict:
+        async with self.conn.execute(
+            """
+            SELECT COUNT(*) AS n, AVG(score) AS avg FROM peer_votes
+             WHERE target = ?
+            """,
+            (target,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        async with self.conn.execute(
+            "SELECT tier, COUNT(*) AS n FROM peer_votes WHERE target = ? GROUP BY tier",
+            (target,),
+        ) as cursor:
+            spread = {r["tier"]: int(r["n"]) for r in await cursor.fetchall()}
+        return {
+            "count": int(row["n"] or 0),
+            "average": round(float(row["avg"] or 0), 2),
+            "spread": spread,
+        }
+
+    async def peer_add_report(
+        self, reporter_id: int, target: str, reason: str
+    ) -> int:
+        cursor = await self.conn.execute(
+            """
+            INSERT INTO peer_reports (reporter_id, target, reason, created_at)
+                 VALUES (?, ?, ?, ?)
+            """,
+            (reporter_id, target, reason, _now_iso()),
+        )
+        await self.conn.commit()
+        return int(cursor.lastrowid or 0)
+
+    async def peer_close_report(self, report_id: int, status: str) -> None:
+        await self.conn.execute(
+            "UPDATE peer_reports SET status = ? WHERE id = ?", (status, report_id)
+        )
+        await self.conn.commit()
+
+    async def peer_stats(self) -> dict:
+        async with self.conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(status = 'active') AS active,
+                   SUM(status = 'hidden') AS hidden,
+                   SUM(status = 'banned') AS banned
+              FROM peer_profiles
+            """
+        ) as cursor:
+            row = await cursor.fetchone()
+        async with self.conn.execute("SELECT COUNT(*) AS n FROM peer_votes") as cursor:
+            votes = int((await cursor.fetchone())["n"])
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM peer_reports WHERE status = 'open'"
+        ) as cursor:
+            reports = int((await cursor.fetchone())["n"])
+        return {
+            "profiles": int(row["total"] or 0),
+            "active": int(row["active"] or 0),
+            "hidden": int(row["hidden"] or 0),
+            "banned": int(row["banned"] or 0),
+            "votes": votes,
+            "open_reports": reports,
+        }
 
     async def diagnose_labels(self) -> dict:
         info = {"backend": "sqlite", "target": self._path}
@@ -801,7 +1122,8 @@ CREATE TABLE IF NOT EXISTS users (
     onboarded_at  TIMESTAMPTZ,
     ref_code      TEXT UNIQUE,
     referred_by   BIGINT,
-    theme         TEXT
+    theme         TEXT,
+    username      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -843,6 +1165,42 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS peer_profiles (
+    user_id      BIGINT PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    age          INTEGER NOT NULL,
+    photo        BYTEA,
+    photo_key    TEXT,
+    status       TEXT    NOT NULL DEFAULT 'active',
+    hidden_until TIMESTAMPTZ,
+    hidden_note  TEXT,
+    terms_version TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS peer_votes (
+    voter_id   BIGINT NOT NULL,
+    target     TEXT   NOT NULL,
+    tier       TEXT   NOT NULL,
+    score      DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (voter_id, target)
+);
+
+CREATE TABLE IF NOT EXISTS peer_reports (
+    id          BIGSERIAL PRIMARY KEY,
+    reporter_id BIGINT NOT NULL,
+    target      TEXT   NOT NULL,
+    reason      TEXT,
+    status      TEXT   NOT NULL DEFAULT 'open',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
+CREATE INDEX IF NOT EXISTS idx_peer_status ON peer_profiles(status);
+
+
 CREATE TABLE IF NOT EXISTS xp_events (
     user_id    BIGINT  NOT NULL,
     key        TEXT    NOT NULL,
@@ -873,6 +1231,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by  BIGINT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS theme        TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username     TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(LOWER(username));
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
 CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by);
@@ -1215,6 +1576,20 @@ class PostgresDatabase(BaseDatabase):
             rows = await conn.fetch("SELECT photo_id, score, metrics FROM labels ORDER BY id")
         return [dict(r) for r in rows]
 
+    async def remember_username(self, user_id: int, username: str) -> None:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET username = $1 WHERE user_id = $2", username, user_id
+            )
+
+    async def user_by_username(self, username: str) -> int | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT user_id FROM users WHERE LOWER(username) = LOWER($1)", username
+            )
+        return int(value) if value else None
+
     async def set_theme(self, user_id: int, theme: str) -> None:
         await self.ensure_user(user_id)
         async with self.pool.acquire() as conn:
@@ -1242,6 +1617,195 @@ class PostgresDatabase(BaseDatabase):
     async def get_setting(self, key: str) -> str | None:
         async with self.pool.acquire() as conn:
             return await conn.fetchval("SELECT value FROM settings WHERE key = $1", key)
+
+
+    # ───────────────────── режим взаимных оценок ──────────────────────
+
+    async def peer_save_profile(
+        self, user_id: int, name: str, age: int, photo: bytes | None,
+        photo_key: str | None, terms_version: str,
+    ) -> None:
+        await self.ensure_user(user_id)
+        async with self.pool.acquire() as conn:
+            if photo is None:
+                await conn.execute(
+                    """
+                    INSERT INTO peer_profiles (user_id, name, age, terms_version)
+                         VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                           name = EXCLUDED.name,
+                           age = EXCLUDED.age,
+                           terms_version = EXCLUDED.terms_version,
+                           updated_at = NOW()
+                    """,
+                    user_id, name, age, terms_version,
+                )
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO peer_profiles
+                           (user_id, name, age, photo, photo_key, status,
+                            terms_version)
+                         VALUES ($1, $2, $3, $4, $5, 'active', $6)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                           name = EXCLUDED.name,
+                           age = EXCLUDED.age,
+                           photo = EXCLUDED.photo,
+                           photo_key = EXCLUDED.photo_key,
+                           status = 'active',
+                           hidden_until = NULL,
+                           hidden_note = NULL,
+                           terms_version = EXCLUDED.terms_version,
+                           updated_at = NOW()
+                    """,
+                    user_id, name, age, photo, photo_key, terms_version,
+                )
+
+    async def peer_profile(self, user_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_id, name, age, photo_key, status, hidden_until,
+                       hidden_note, terms_version
+                  FROM peer_profiles WHERE user_id = $1
+                """,
+                user_id,
+            )
+        return dict(row) if row else None
+
+    async def peer_photo(self, user_id: int) -> bytes | None:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT photo FROM peer_profiles WHERE user_id = $1", user_id
+            )
+        return bytes(value) if value else None
+
+    async def peer_delete(self, user_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM peer_profiles WHERE user_id = $1", user_id)
+
+    async def peer_set_status(
+        self, user_id: int, status: str, hidden_until: datetime | None,
+        note: str | None,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE peer_profiles
+                   SET status = $1, hidden_until = $2, hidden_note = $3,
+                       photo = NULL, photo_key = NULL, updated_at = NOW()
+                 WHERE user_id = $4
+                """,
+                status, hidden_until, note, user_id,
+            )
+
+    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.user_id, p.name, p.age, p.photo_key
+                  FROM peer_profiles p
+                 WHERE p.status = 'active'
+                   AND p.photo IS NOT NULL
+                   AND p.user_id <> $1
+                   AND NOT EXISTS (
+                         SELECT 1 FROM peer_votes v
+                          WHERE v.voter_id = $1
+                            AND v.target = 'u:' || p.user_id::text
+                       )
+                 ORDER BY RANDOM() LIMIT $2
+                """,
+                viewer_id, limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def peer_vote(
+        self, voter_id: int, target: str, tier: str, score: float
+    ) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                INSERT INTO peer_votes (voter_id, target, tier, score)
+                     VALUES ($1, $2, $3, $4)
+                ON CONFLICT DO NOTHING RETURNING target
+                """,
+                voter_id, target, tier, score,
+            )
+        return row is not None
+
+    async def peer_seen(self, viewer_id: int) -> set[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT target FROM peer_votes WHERE voter_id = $1", viewer_id
+            )
+        return {r["target"] for r in rows}
+
+    async def peer_votes_since(self, voter_id: int, since: datetime) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT COUNT(*) FROM peer_votes WHERE voter_id = $1 AND created_at >= $2",
+                voter_id, since,
+            )
+        return int(value or 0)
+
+    async def peer_result(self, target: str) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS n, AVG(score) AS avg FROM peer_votes WHERE target = $1",
+                target,
+            )
+            rows = await conn.fetch(
+                "SELECT tier, COUNT(*) AS n FROM peer_votes WHERE target = $1 GROUP BY tier",
+                target,
+            )
+        return {
+            "count": int(row["n"] or 0),
+            "average": round(float(row["avg"] or 0), 2),
+            "spread": {r["tier"]: int(r["n"]) for r in rows},
+        }
+
+    async def peer_add_report(
+        self, reporter_id: int, target: str, reason: str
+    ) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                """
+                INSERT INTO peer_reports (reporter_id, target, reason)
+                     VALUES ($1, $2, $3) RETURNING id
+                """,
+                reporter_id, target, reason,
+            )
+        return int(value or 0)
+
+    async def peer_close_report(self, report_id: int, status: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE peer_reports SET status = $1 WHERE id = $2", status, report_id
+            )
+
+    async def peer_stats(self) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status = 'active') AS active,
+                       COUNT(*) FILTER (WHERE status = 'hidden') AS hidden,
+                       COUNT(*) FILTER (WHERE status = 'banned') AS banned
+                  FROM peer_profiles
+                """
+            )
+            votes = await conn.fetchval("SELECT COUNT(*) FROM peer_votes")
+            reports = await conn.fetchval(
+                "SELECT COUNT(*) FROM peer_reports WHERE status = 'open'"
+            )
+        return {
+            "profiles": int(row["total"] or 0),
+            "active": int(row["active"] or 0),
+            "hidden": int(row["hidden"] or 0),
+            "banned": int(row["banned"] or 0),
+            "votes": int(votes or 0),
+            "open_reports": int(reports or 0),
+        }
 
     async def diagnose_labels(self) -> dict:
         # Хост показываем без логина и пароля — по нему видно, та ли база

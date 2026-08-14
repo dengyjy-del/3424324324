@@ -471,20 +471,6 @@
   </section>
 
   <!-- ══════════════ ГАЙДЫ ══════════════ -->
-  <section class="screen" id="s-guides">
-    <header style="margin-bottom:16px">
-      <p class="eyebrow">Что реально работает</p>
-      <h1 style="margin-top:6px">Гайды</h1>
-    </header>
-
-    <div class="glass pad shop-balance" id="shop-balance"></div>
-
-    <p class="eyebrow" style="margin:20px 0 10px">Открываются за XP</p>
-    <div id="shop-list"></div>
-
-    <p class="eyebrow" style="margin:24px 0 10px">Бесплатные</p>
-    <div id="guides-list"></div>
-  </section>
 
   <!-- ══════════════ РАЗМЕТКА (только владельцу) ══════════════ -->
   <section class="screen" id="s-label">
@@ -535,6 +521,71 @@
     </div>
   </section>
 
+  <!-- ══════════════ ВЗАИМНЫЕ ОЦЕНКИ ══════════════ -->
+  <section class="screen" id="s-peer">
+    <header style="margin-bottom:16px">
+      <p class="eyebrow">Оценки от людей</p>
+      <h1 style="margin-top:6px">Взаимно</h1>
+    </header>
+
+    <!-- согласие: показывается один раз перед созданием анкеты -->
+    <div class="glass pad hidden" id="pr-consent">
+      <div class="mark" style="margin-bottom:14px">👥</div>
+      <h2>Как это работает</h2>
+      <p class="tiny" style="margin-top:8px;line-height:1.5" id="pr-consent-text"></p>
+      <label class="pr-check">
+        <input type="checkbox" id="pr-agree">
+        <span id="pr-agree-label"></span>
+      </label>
+      <button class="btn btn-primary" id="pr-accept" style="margin-top:12px" disabled>
+        Согласен, создать анкету
+      </button>
+    </div>
+
+    <!-- создание и редактирование анкеты -->
+    <div class="glass pad hidden" id="pr-form">
+      <p class="eyebrow">Твоя анкета</p>
+      <input class="ref-input" id="pr-name" placeholder="ИМЯ" maxlength="24"
+             autocomplete="off" style="text-transform:none;letter-spacing:0.04em">
+      <input class="ref-input" id="pr-age" placeholder="ВОЗРАСТ" inputmode="numeric"
+             maxlength="2" style="margin-top:9px">
+      <div class="pr-photo" id="pr-photo">
+        <img id="pr-photo-img" alt="">
+        <span id="pr-photo-hint">Нажми, чтобы выбрать фото</span>
+      </div>
+      <input type="file" id="pr-file" accept="image/*" class="hidden">
+      <button class="btn btn-primary" id="pr-save" style="margin-top:12px">
+        Сохранить анкету
+      </button>
+      <p class="tiny" style="margin-top:10px;color:var(--ink-3)" id="pr-form-note"></p>
+    </div>
+
+    <!-- статус анкеты -->
+    <div class="glass pad hidden" id="pr-mine"></div>
+
+    <!-- очередь на оценку -->
+    <div class="hidden" id="pr-deck">
+      <div class="pr-card">
+        <img id="pr-card-img" alt="">
+        <div class="pr-card-veil">
+          <span id="pr-card-name"></span>
+        </div>
+      </div>
+      <div class="pr-tiers" id="pr-tiers"></div>
+      <div class="stack" style="margin-top:10px">
+        <button class="btn btn-glass" id="pr-report">🚩 Пожаловаться</button>
+      </div>
+      <p class="tiny" style="margin-top:10px;text-align:center" id="pr-left"></p>
+    </div>
+
+    <div class="glass pad hidden" id="pr-empty">
+      <h3>Анкеты закончились</h3>
+      <p class="tiny" style="margin-top:6px">
+        Загляни позже — новые появляются постоянно.
+      </p>
+    </div>
+  </section>
+
   <!-- ══════════════ ТАБ-БАР ══════════════ -->
   <nav class="tabs" id="tabs">
     <div class="tab-pill" id="tab-pill"></div>
@@ -566,18 +617,17 @@
       </svg>
       Друзья
     </button>
+    <button class="tab hidden" data-screen="s-peer" id="tab-peer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20.5s-7-4.2-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11.5c0 4.8-7 9-7 9z"/>
+      </svg>
+      Взаимно
+    </button>
     <button class="tab hidden" data-screen="s-label" id="tab-label">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>
       </svg>
       Разметка
-    </button>
-    <button class="tab" data-screen="s-guides">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/>
-        <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>
-      </svg>
-      Гайды
     </button>
   </nav>
 
@@ -597,6 +647,16 @@
     <button class="btn btn-primary" id="share-send">Отправить</button>
     <button class="btn btn-glass" id="share-save">Сохранить в галерею</button>
   </div>
+</div>
+
+<div class="sheet-veil" id="pr-veil"></div>
+<div class="sheet" id="pr-sheet">
+  <div class="sheet-grip"></div>
+  <div class="sheet-head">
+    <h2>Что не так с анкетой?</h2>
+    <p class="tiny">Жалобу разберёт модератор</p>
+  </div>
+  <div class="stack" id="pr-reasons" style="padding-bottom:6px"></div>
 </div>
 
 <div class="toast" id="toast"></div>

@@ -12,6 +12,7 @@ initData проверяется на каждом запросе, состоян
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -22,15 +23,19 @@ import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import engagement
+import peer
 import rating
 from access import DemoState, SubscriptionGate
 from config import Config, redact_secrets
 from database import BaseDatabase as Database
 from webapp.auth import AuthError, TelegramUser, verify_init_data
+from aiogram.types import BufferedInputFile
+
+import keyboards
 from webapp.guides import GUIDES
 
 logger = logging.getLogger("looksmax.webapp")
@@ -44,7 +49,68 @@ STATIC_DIR = PUBLIC_DIR / "static"
 # тело больше 4.5 МБ. Клиент ужимает снимок до ~300 КБ ещё в браузере,
 # так что до этого лимита доходит только мусор.
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+
+# Фото анкеты хранится в базе, поэтому лимит жёстче: браузер ужимает снимок
+# до ~700px перед отправкой, и в норме получается 60-120 КБ.
+MAX_PEER_PHOTO_BYTES = 900 * 1024
+SEED_DIR = Path(__file__).resolve().parent.parent / "public" / "seed"
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+def seed_files() -> list[str]:
+    """
+    Снимки для наполнения из public/seed. Пока живых анкет мало, показывать
+    было бы нечего — оценивать пустоту люди не станут.
+    """
+    if not SEED_DIR.is_dir():
+        return []
+    return sorted(
+        item.name
+        for item in SEED_DIR.iterdir()
+        if item.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+    )
+
+
+async def notify_report(
+    bot, db, config, report_id: int, reporter_id: int, target: str, reason: str
+) -> None:
+    """
+    Отправляет жалобу владельцу вместе с фото и кнопками решения.
+
+    Молчаливый сбой здесь недопустим: непойманная жалоба означает, что
+    спорный снимок продолжает показываться людям.
+    """
+    if bot is None or not config.admin_ids:
+        logger.error("Жалоба %s не отправлена: нет бота или ADMIN_IDS", report_id)
+        return
+
+    title = peer.REASON_TITLES.get(reason, reason)
+    caption = (
+        f"🚨 <b>Жалоба #{report_id}</b>\n"
+        f"Причина: {title}\n"
+        f"На: <code>{target}</code>\n"
+        f"От: <code>{reporter_id}</code>"
+    )
+
+    payload: bytes | None = None
+    if target.startswith("u:"):
+        with contextlib.suppress(ValueError):
+            payload = await db.peer_photo(int(target[2:]))
+
+    markup = keyboards.report_actions(report_id, target)
+    for admin_id in config.admin_ids:
+        try:
+            if payload:
+                await bot.send_photo(
+                    admin_id,
+                    BufferedInputFile(payload, filename="report.jpg"),
+                    caption=caption,
+                    reply_markup=markup,
+                )
+            else:
+                await bot.send_message(admin_id, caption, reply_markup=markup)
+        except Exception:  # noqa: BLE001
+            logger.exception("Не доставлена жалоба %s админу %s", report_id, admin_id)
 
 
 def create_app(
@@ -570,6 +636,235 @@ def create_app(
         if export:
             stats["rows"] = await db.export_labels()
         return stats
+
+
+    # ═══════════════════ РЕЖИМ ВЗАИМНЫХ ОЦЕНОК ════════════════════════
+
+    async def _peer_require_admin(user_id: int) -> None:
+        # Раздел пока закрыт: включается снятием этой проверки, когда
+        # владелец решит открыть его всем.
+        if not config.is_admin(user_id):
+            raise HTTPException(status_code=403, detail="Раздел пока закрыт")
+
+    async def _peer_state(user_id: int) -> dict:
+        profile = await db.peer_profile(user_id)
+        seen = await db.peer_seen(user_id)
+        used = await db.peer_votes_since(user_id, _day_start())
+
+        state: dict = {
+            "min_age": peer.PEER_MIN_AGE,
+            "terms_version": peer.TERMS_VERSION,
+            "consent_text": peer.CONSENT_TEXT,
+            "tiers": [
+                {"key": t.key, "emoji": t.emoji, "title": t.title}
+                for t in peer.PEER_TIERS
+            ],
+            "reasons": [
+                {"key": k, "title": v} for k, v in peer.REPORT_REASONS
+            ],
+            "votes_left": max(0, peer.DAILY_VOTE_LIMIT - used),
+            "rated": len(seen),
+            "profile": None,
+        }
+
+        if profile:
+            target = f"u:{user_id}"
+            result = await db.peer_result(target)
+            hidden_until = profile.get("hidden_until")
+            if isinstance(hidden_until, datetime):
+                hidden_until = hidden_until.isoformat(timespec="seconds")
+
+            state["profile"] = {
+                "name": profile["name"],
+                "age": profile["age"],
+                "status": profile["status"],
+                "has_photo": bool(profile.get("photo_key")),
+                "hidden_until": hidden_until,
+                "hidden_note": profile.get("hidden_note"),
+                "terms_ok": profile.get("terms_version") == peer.TERMS_VERSION,
+                "votes": result["count"],
+                "average": result["average"],
+                "tier": (
+                    peer.tier_for_score(result["average"]).title
+                    if result["count"] >= 3
+                    else None
+                ),
+                "spread": result["spread"],
+            }
+
+        return state
+
+    @app.get("/api/peer/state")
+    async def peer_state(user: TelegramUser = Depends(current_user)) -> dict:
+        await _peer_require_admin(user.id)
+        return await _peer_state(user.id)
+
+    @app.post("/api/peer/profile")
+    async def peer_save(
+        name: str = Form(...),
+        age: int = Form(...),
+        accepted: int = Form(default=0),
+        photo: UploadFile | None = File(default=None),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        """Создание и обновление анкеты. Фото обязательно при первом входе."""
+        await _peer_require_admin(user.id)
+        await _require_subscription(user.id)
+
+        if not accepted:
+            raise HTTPException(status_code=400, detail="Нужно принять правила")
+
+        clean = peer.clean_name(name)
+        problem = peer.name_error(clean) or peer.age_error(age)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
+        payload: bytes | None = None
+        key: str | None = None
+
+        if photo is not None:
+            if photo.content_type not in ALLOWED_TYPES:
+                raise HTTPException(status_code=415, detail="Нужен JPEG, PNG или WebP")
+            payload = await photo.read(MAX_PEER_PHOTO_BYTES + 1)
+            if len(payload) > MAX_PEER_PHOTO_BYTES:
+                raise HTTPException(status_code=413, detail="Фото слишком тяжёлое")
+            if len(payload) < 1024:
+                raise HTTPException(status_code=400, detail="Файл повреждён")
+            key = hashlib.sha256(payload).hexdigest()[:32]
+
+        existing = await db.peer_profile(user.id)
+        if payload is None and not (existing and existing.get("photo_key")):
+            raise HTTPException(status_code=400, detail="Нужно фото для анкеты")
+
+        # Скрытая анкета возвращается только с новым снимком: смысл скрытия
+        # в том, чтобы прежнее фото больше не показывалось.
+        if (
+            existing
+            and existing.get("status") == "hidden"
+            and payload is None
+        ):
+            raise HTTPException(
+                status_code=400, detail="Загрузи новое фото, чтобы вернуться"
+            )
+
+        if existing and existing.get("status") == "banned":
+            raise HTTPException(status_code=403, detail="Анкета заблокирована")
+
+        await db.peer_save_profile(
+            user.id, clean, age, payload, key, peer.TERMS_VERSION
+        )
+        return await _peer_state(user.id)
+
+    @app.delete("/api/peer/profile")
+    async def peer_remove(user: TelegramUser = Depends(current_user)) -> dict:
+        await _peer_require_admin(user.id)
+        await db.peer_delete(user.id)
+        return {"ok": True}
+
+    @app.get("/api/peer/next")
+    async def peer_next(user: TelegramUser = Depends(current_user)) -> dict:
+        """Очередь на оценку: сначала живые анкеты, потом снимки из папки."""
+        await _peer_require_admin(user.id)
+
+        profile = await db.peer_profile(user.id)
+        if not profile or not profile.get("photo_key"):
+            raise HTTPException(status_code=428, detail="Сначала своя анкета")
+        if profile.get("status") != "active":
+            raise HTTPException(status_code=423, detail="Анкета скрыта")
+
+        used = await db.peer_votes_since(user.id, _day_start())
+        if used >= peer.DAILY_VOTE_LIMIT:
+            raise HTTPException(status_code=429, detail="Лимит оценок на сегодня")
+
+        cards = [
+            {
+                "target": f"u:{row['user_id']}",
+                "name": row["name"],
+                "age": row["age"],
+                "photo": f"/api/peer/photo/{row['user_id']}?v={row['photo_key'][:8]}",
+            }
+            for row in await db.peer_next(user.id, limit=12)
+        ]
+
+        if len(cards) < 6:
+            seen = await db.peer_seen(user.id)
+            for name in seed_files():
+                target = f"seed:{name}"
+                if target in seen:
+                    continue
+                cards.append(
+                    {"target": target, "name": "", "age": 0, "photo": f"/seed/{name}"}
+                )
+                if len(cards) >= 12:
+                    break
+
+        return {"cards": cards, "votes_left": peer.DAILY_VOTE_LIMIT - used}
+
+    @app.get("/api/peer/photo/{target_id}")
+    async def peer_photo(
+        target_id: int, user: TelegramUser = Depends(current_user)
+    ) -> Response:
+        await _peer_require_admin(user.id)
+
+        owner = await db.peer_profile(target_id)
+        # Скрытую и заблокированную анкету не отдаём даже по прямой ссылке
+        if not owner or (owner.get("status") != "active" and target_id != user.id):
+            raise HTTPException(status_code=404, detail="Нет фото")
+
+        payload = await db.peer_photo(target_id)
+        if not payload:
+            raise HTTPException(status_code=404, detail="Нет фото")
+
+        return Response(
+            content=payload,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+
+    @app.post("/api/peer/vote")
+    async def peer_vote(
+        target: str = Form(...),
+        tier: str = Form(...),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        await _peer_require_admin(user.id)
+
+        chosen = peer.TIER_BY_KEY.get(tier)
+        if chosen is None:
+            raise HTTPException(status_code=400, detail="Неизвестная оценка")
+        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80})", target):
+            raise HTTPException(status_code=400, detail="Некорректная цель")
+        if target == f"u:{user.id}":
+            raise HTTPException(status_code=400, detail="Себя оценивать нельзя")
+
+        used = await db.peer_votes_since(user.id, _day_start())
+        if used >= peer.DAILY_VOTE_LIMIT:
+            raise HTTPException(status_code=429, detail="Лимит оценок на сегодня")
+
+        fresh = await db.peer_vote(user.id, target, chosen.key, chosen.score)
+        if fresh:
+            # За оценку чужой анкеты капают XP: так режим кормит основную
+            # механику, а не живёт отдельно от неё.
+            await db.award_xp(user.id, f"peervote:{target}", 1)
+
+        return {"ok": True, "counted": fresh, "votes_left": max(0, peer.DAILY_VOTE_LIMIT - used - 1)}
+
+    @app.post("/api/peer/report")
+    async def peer_report(
+        target: str = Form(...),
+        reason: str = Form(default="other"),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        await _peer_require_admin(user.id)
+
+        if not re.fullmatch(r"(u:\d{1,20}|seed:[\w.\-]{1,80})", target):
+            raise HTTPException(status_code=400, detail="Некорректная цель")
+        if reason not in peer.REASON_TITLES:
+            reason = "other"
+
+        report_id = await db.peer_add_report(user.id, target, reason)
+        await notify_report(bot, db, config, report_id, user.id, target, reason)
+        return {"ok": True}
 
     @app.get("/api/referral")
     async def referral(user: TelegramUser = Depends(current_user)) -> dict:
