@@ -134,7 +134,7 @@ def peer_vote(target: str) -> InlineKeyboardMarkup:
 
     builder.row(
         InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
-        InlineKeyboardButton(text="⏭ Пропустить", callback_data="pnext"),
+        InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"pnext:{target}"),
     )
     builder.row(InlineKeyboardButton(text="← Выйти", callback_data="pback"))
     return builder.as_markup()
@@ -157,7 +157,7 @@ def peer_report_reasons(target: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=title, callback_data=f"prr:{key}:{target}")
         )
     builder.row(
-        InlineKeyboardButton(text="← Отмена", callback_data="pnext"),
+        InlineKeyboardButton(text="← Отмена", callback_data=f"pnext:{target}"),
         InlineKeyboardButton(text="🏠 Выйти", callback_data="pback"),
     )
     return builder.as_markup()
@@ -241,7 +241,12 @@ def peer_rated(webapp_url: str = "") -> InlineKeyboardMarkup:
 
 
 def peer_answer(target: str) -> InlineKeyboardMarkup:
-    """Карточка того, кто тебя оценил: ответить оценкой или пропустить."""
+    """
+    Карточка того, кто тебя оценил.
+
+    Префикс pvw отличает этот поток от общей очереди: после ответа нужно
+    показать следующего оценившего, а не случайную анкету.
+    """
     from peer import PEER_TIERS
 
     builder = InlineKeyboardBuilder()
@@ -250,7 +255,7 @@ def peer_answer(target: str) -> InlineKeyboardMarkup:
         row.append(
             InlineKeyboardButton(
                 text=f"{tier.emoji} {tier.title}",
-                callback_data=f"pv:{tier.key}:{target}",
+                callback_data=f"pvw:{tier.key}:{target}",
             )
         )
         if len(row) == 2:
@@ -261,8 +266,9 @@ def peer_answer(target: str) -> InlineKeyboardMarkup:
 
     builder.row(
         InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
-        InlineKeyboardButton(text="✖️ Закрыть", callback_data="pclose"),
+        InlineKeyboardButton(text="⏭ Дальше", callback_data=f"pwnext:{target}"),
     )
+    builder.row(InlineKeyboardButton(text="✖️ Закрыть", callback_data="pclose"))
     return builder.as_markup()
 
 
@@ -277,4 +283,41 @@ def legal_links(terms_url: str = "", privacy_url: str = "") -> InlineKeyboardMar
     if row:
         builder.row(*row)
     builder.row(InlineKeyboardButton(text="🏠 В меню", callback_data="menu"))
+    return builder.as_markup()
+
+
+def broadcast_confirm() -> InlineKeyboardMarkup:
+    """Подтверждение рассылки: письмо на всю базу не отзывается."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📨 Отправить", callback_data="bcast:go"),
+        InlineKeyboardButton(text="✖️ Отмена", callback_data="bcast:stop"),
+    )
+    return builder.as_markup()
+
+
+def broadcast_more() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="➡️ Продолжить", callback_data="bcast:go"),
+        InlineKeyboardButton(text="⏹ Остановить", callback_data="bcast:stop"),
+    )
+    return builder.as_markup()
+
+
+def broadcast_cta(webapp_url: str = "") -> InlineKeyboardMarkup:
+    """
+    Кнопка под рассылкой. Без неё письмо о новом режиме заканчивается
+    ничем: человек дочитал, закрыл чат и не дошёл до самого режима.
+    """
+    builder = InlineKeyboardBuilder()
+    if webapp_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔥 Открыть ChadMatch", web_app=WebAppInfo(url=webapp_url)
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text="⭐ Оценивать прямо в боте", callback_data="peer")
+    )
     return builder.as_markup()

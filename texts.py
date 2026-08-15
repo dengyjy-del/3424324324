@@ -978,3 +978,79 @@ def peer_switch_status(open_now: bool) -> str:
         "<code>/peer_open off</code> — закрыть немедленно\n"
         "<i>Выключатель работает без передеплоя.</i>"
     )
+
+
+PEER_WHO_DONE = (
+    "✅ <b>Ты ответил всем</b>\n"
+    "Больше никто не ждёт твоей оценки.\n"
+    "<i>Можно оценивать дальше — там анкеты тех, кто тебя ещё не видел.</i>"
+)
+
+
+BROADCAST_USAGE = (
+    "📨 <b>РАССЫЛКА</b>\n"
+    f"{LINE}\n"
+    "<code>/send_all текст</code> — всем пользователям бота\n"
+    "<code>/send_new текст</code> — только тем, у кого нет анкеты ChadMatch\n"
+    f"{LINE}\n"
+    "<i>Поддерживается разметка: &lt;b&gt;жирный&lt;/b&gt;, "
+    "&lt;i&gt;курсив&lt;/i&gt;, ссылки.\n"
+    "Под каждым письмом будет кнопка ChadMatch.\n"
+    "Проверить на себе: /send свой_id текст</i>"
+)
+
+BROADCAST_STOPPED = "⏹ <b>Рассылка остановлена.</b>"
+
+
+def broadcast_preview(text: str, total: int, without_peer: bool) -> str:
+    who = "тем, у кого нет анкеты ChadMatch" if without_peer else "всем пользователям"
+    return (
+        "📨 <b>ПРЕДПРОСМОТР</b>\n"
+        f"{LINE}\n"
+        f"{text}\n"
+        f"{LINE}\n"
+        f"Получателей: <b>{total}</b> — {who}\n"
+        "<i>Отправка идёт порциями, прогресс покажу. "
+        "Отменить уже отправленное нельзя.</i>"
+    )
+
+
+def broadcast_progress(sent: int, failed: int, done: bool) -> str:
+    head = "✅ <b>Рассылка завершена</b>" if done else "📨 <b>Порция отправлена</b>"
+    lines = [head, LINE, f"Доставлено: <b>{sent}</b>"]
+
+    if failed:
+        lines.append(
+            f"Не доставлено: <b>{failed}</b>\n"
+            "<i>Обычно это те, кто заблокировал бота.</i>"
+        )
+    if not done:
+        lines.append("\n<i>Нажми «Продолжить», чтобы отправить дальше.</i>")
+
+    return "\n".join(lines)
+
+
+SEND_ONE_USAGE = (
+    "📨 <b>ПРОБНАЯ ОТПРАВКА</b>\n"
+    f"{LINE}\n"
+    "<code>/send 630046207 текст</code> — по ID\n"
+    "<code>/send @username текст</code> — по юзернейму\n"
+    f"{LINE}\n"
+    "<i>Придёт ровно то же, что получат при рассылке, — вместе с кнопкой "
+    "ChadMatch. Удобно проверить на себе перед /send_all.</i>"
+)
+
+
+def send_one_done(who: str) -> str:
+    return (
+        f"✅ <b>Отправлено</b> → {safe(who)}\n"
+        "<i>Если всё нравится — тот же текст в /send_all или /send_new.</i>"
+    )
+
+
+def send_one_failed(error: str) -> str:
+    return (
+        "❌ <b>Не доставлено</b>\n"
+        f"<code>{safe(error)}</code>\n"
+        "<i>Частая причина: человек не запускал бота или заблокировал его.</i>"
+    )

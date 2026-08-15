@@ -195,8 +195,10 @@ class BaseDatabase(ABC):
     ) -> None: ...
 
     @abstractmethod
-    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
-        """Анкеты, которые зритель ещё не оценивал."""
+    async def peer_next(
+        self, viewer_id: int, limit: int = 10, skip_since: datetime | None = None
+    ) -> list[dict]:
+        """Анкеты, которые зритель ещё не оценивал и недавно не пропускал."""
 
     @abstractmethod
     async def peer_vote(
@@ -206,6 +208,13 @@ class BaseDatabase(ABC):
 
     @abstractmethod
     async def peer_seen(self, viewer_id: int) -> set[str]: ...
+
+    @abstractmethod
+    async def peer_skip(self, viewer_id: int, target: str) -> None:
+        """Запоминает пропуск, чтобы карточка не возвращалась сразу."""
+
+    @abstractmethod
+    async def peer_skipped(self, viewer_id: int, since: datetime) -> set[str]: ...
 
     @abstractmethod
     async def peer_votes_since(self, voter_id: int, since: datetime) -> int: ...
@@ -294,6 +303,20 @@ class BaseDatabase(ABC):
     @abstractmethod
     async def referral_stats(self, limit: int = 10) -> dict:
         """Сводка по приглашениям: всего, топ пригласивших, выдано XP."""
+
+    @abstractmethod
+    async def broadcast_batch(
+        self, after_id: int, limit: int, without_peer: bool = False
+    ) -> list[int]:
+        """
+        Порция получателей рассылки, отсортированная по id.
+
+        Порциями, а не одним списком: serverless-функция живёт секунды,
+        и рассылка на тысячу человек в один вызов просто оборвётся.
+        """
+
+    @abstractmethod
+    async def broadcast_size(self, without_peer: bool = False) -> int: ...
 
     @abstractmethod
     async def audience(self, active_since: datetime) -> dict:
@@ -415,6 +438,15 @@ CREATE TABLE IF NOT EXISTS peer_seed (
     age        INTEGER,
     added_by   INTEGER,
     created_at TEXT NOT NULL
+);
+
+-- Пропущенные анкеты. Отдельно от оценок: пропуск не должен влиять на
+-- средний балл, но и показывать ту же карточку по кругу нельзя.
+CREATE TABLE IF NOT EXISTS peer_skips (
+    voter_id   INTEGER NOT NULL,
+    target     TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    PRIMARY KEY (voter_id, target)
 );
 
 CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
@@ -903,7 +935,12 @@ class SQLiteDatabase(BaseDatabase):
         )
         await self.conn.commit()
 
-    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
+    async def peer_next(
+        self, viewer_id: int, limit: int = 10, skip_since: datetime | None = None
+    ) -> list[dict]:
+        moment = (
+            skip_since or datetime.now(timezone.utc)
+        ).isoformat(timespec="seconds")
         async with self.conn.execute(
             """
             SELECT p.user_id, p.name, p.age, p.photo_key
@@ -915,9 +952,14 @@ class SQLiteDatabase(BaseDatabase):
                      SELECT 1 FROM peer_votes v
                       WHERE v.voter_id = ? AND v.target = 'u:' || p.user_id
                    )
+               AND NOT EXISTS (
+                     SELECT 1 FROM peer_skips s
+                      WHERE s.voter_id = ? AND s.target = 'u:' || p.user_id
+                        AND s.created_at >= ?
+                   )
              ORDER BY RANDOM() LIMIT ?
             """,
-            (viewer_id, viewer_id, limit),
+            (viewer_id, viewer_id, viewer_id, moment, limit),
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
@@ -938,6 +980,23 @@ class SQLiteDatabase(BaseDatabase):
     async def peer_seen(self, viewer_id: int) -> set[str]:
         async with self.conn.execute(
             "SELECT target FROM peer_votes WHERE voter_id = ?", (viewer_id,)
+        ) as cursor:
+            return {r["target"] for r in await cursor.fetchall()}
+
+    async def peer_skip(self, viewer_id: int, target: str) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO peer_skips (voter_id, target, created_at) VALUES (?, ?, ?)
+            ON CONFLICT(voter_id, target) DO UPDATE SET created_at = excluded.created_at
+            """,
+            (viewer_id, target, _now_iso()),
+        )
+        await self.conn.commit()
+
+    async def peer_skipped(self, viewer_id: int, since: datetime) -> set[str]:
+        async with self.conn.execute(
+            "SELECT target FROM peer_skips WHERE voter_id = ? AND created_at >= ?",
+            (viewer_id, since.isoformat(timespec="seconds")),
         ) as cursor:
             return {r["target"] for r in await cursor.fetchall()}
 
@@ -1221,6 +1280,35 @@ class SQLiteDatabase(BaseDatabase):
 
         return {"total": total, "inviters": inviters, "xp": xp, "top": top}
 
+    async def broadcast_batch(
+        self, after_id: int, limit: int, without_peer: bool = False
+    ) -> list[int]:
+        extra = (
+            "AND NOT EXISTS (SELECT 1 FROM peer_profiles p WHERE p.user_id = u.user_id)"
+            if without_peer
+            else ""
+        )
+        async with self.conn.execute(
+            f"""
+              SELECT u.user_id FROM users u
+               WHERE u.user_id > ? {extra}
+            ORDER BY u.user_id LIMIT ?
+            """,
+            (after_id, limit),
+        ) as cursor:
+            return [int(r["user_id"]) for r in await cursor.fetchall()]
+
+    async def broadcast_size(self, without_peer: bool = False) -> int:
+        extra = (
+            "WHERE NOT EXISTS (SELECT 1 FROM peer_profiles p WHERE p.user_id = u.user_id)"
+            if without_peer
+            else ""
+        )
+        async with self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM users u {extra}"
+        ) as cursor:
+            return int((await cursor.fetchone())["n"])
+
     async def audience(self, active_since: datetime) -> dict:
         moment = active_since.isoformat(timespec="seconds")
         async with self.conn.execute(
@@ -1362,6 +1450,13 @@ CREATE TABLE IF NOT EXISTS peer_seed (
     age        INTEGER,
     added_by   BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS peer_skips (
+    voter_id   BIGINT NOT NULL,
+    target     TEXT   NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (voter_id, target)
 );
 
 CREATE INDEX IF NOT EXISTS idx_peer_votes_target ON peer_votes(target);
@@ -1868,7 +1963,10 @@ class PostgresDatabase(BaseDatabase):
                 status, hidden_until, note, user_id,
             )
 
-    async def peer_next(self, viewer_id: int, limit: int = 10) -> list[dict]:
+    async def peer_next(
+        self, viewer_id: int, limit: int = 10, skip_since: datetime | None = None
+    ) -> list[dict]:
+        moment = skip_since or datetime.now(timezone.utc)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -1882,9 +1980,15 @@ class PostgresDatabase(BaseDatabase):
                           WHERE v.voter_id = $1
                             AND v.target = 'u:' || p.user_id::text
                        )
+                   AND NOT EXISTS (
+                         SELECT 1 FROM peer_skips s
+                          WHERE s.voter_id = $1
+                            AND s.target = 'u:' || p.user_id::text
+                            AND s.created_at >= $3
+                       )
                  ORDER BY RANDOM() LIMIT $2
                 """,
-                viewer_id, limit,
+                viewer_id, limit, moment,
             )
         return [dict(r) for r in rows]
 
@@ -1906,6 +2010,24 @@ class PostgresDatabase(BaseDatabase):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT target FROM peer_votes WHERE voter_id = $1", viewer_id
+            )
+        return {r["target"] for r in rows}
+
+    async def peer_skip(self, viewer_id: int, target: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO peer_skips (voter_id, target) VALUES ($1, $2)
+                ON CONFLICT (voter_id, target) DO UPDATE SET created_at = NOW()
+                """,
+                viewer_id, target,
+            )
+
+    async def peer_skipped(self, viewer_id: int, since: datetime) -> set[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT target FROM peer_skips WHERE voter_id = $1 AND created_at >= $2",
+                viewer_id, since,
             )
         return {r["target"] for r in rows}
 
@@ -2175,6 +2297,35 @@ class PostgresDatabase(BaseDatabase):
             "xp": int(xp or 0),
             "top": [(int(r["inviter"]), int(r["n"])) for r in rows],
         }
+
+    async def broadcast_batch(
+        self, after_id: int, limit: int, without_peer: bool = False
+    ) -> list[int]:
+        extra = (
+            "AND NOT EXISTS (SELECT 1 FROM peer_profiles p WHERE p.user_id = u.user_id)"
+            if without_peer
+            else ""
+        )
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                  SELECT u.user_id FROM users u
+                   WHERE u.user_id > $1 {extra}
+                ORDER BY u.user_id LIMIT $2
+                """,
+                after_id, limit,
+            )
+        return [int(r["user_id"]) for r in rows]
+
+    async def broadcast_size(self, without_peer: bool = False) -> int:
+        extra = (
+            "WHERE NOT EXISTS (SELECT 1 FROM peer_profiles p WHERE p.user_id = u.user_id)"
+            if without_peer
+            else ""
+        )
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(f"SELECT COUNT(*) FROM users u {extra}")
+        return int(value or 0)
 
     async def audience(self, active_since: datetime) -> dict:
         async with self.pool.acquire() as conn:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -481,6 +482,166 @@ async def cmd_peer_delete(message: Message, db: Database, config: Config) -> Non
     await message.answer(texts.PEER_DELETED)
 
 
+# ───────────────────────────── рассылка ────────────────────────────────────
+#
+# Отправка идёт порциями с сохранением позиции: serverless-функция живёт
+# считаные секунды, и тысяча сообщений в один вызов оборвётся на середине.
+# Перед первой отправкой обязателен предпросмотр — опечатку в письме на всю
+# базу уже не отозвать.
+
+BROADCAST_BATCH = 60
+
+
+def _broadcast_draft(text: str, without_peer: bool) -> dict:
+    return {
+        "text": text,
+        "without_peer": without_peer,
+        "cursor": 0,
+        "sent": 0,
+        "failed": 0,
+    }
+
+
+async def _start_broadcast(
+    message: Message, db: Database, config: Config, without_peer: bool
+) -> None:
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(texts.BROADCAST_USAGE)
+        return
+
+    text = parts[1].strip()
+    total = await db.broadcast_size(without_peer)
+
+    await db.set_setting(
+        f"bcast:{user.id}", json.dumps(_broadcast_draft(text, without_peer))
+    )
+    await message.answer(
+        texts.broadcast_preview(text, total, without_peer),
+        reply_markup=keyboards.broadcast_confirm(),
+    )
+    # Показываем письмо ровно таким, каким его получат: с кнопкой и разметкой
+    with contextlib.suppress(TelegramAPIError):
+        await message.answer(
+            text, reply_markup=keyboards.broadcast_cta(config.webapp_url)
+        )
+
+
+@router.message(Command("send"))
+async def cmd_send_one(message: Message, db: Database, config: Config) -> None:
+    """
+    /send <id|@username> текст — одно сообщение конкретному человеку.
+
+    Нужна перед рассылкой: увидеть письмо ровно таким, каким его получат
+    остальные, дешевле, чем разослать опечатку на всю базу.
+    """
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[2].strip():
+        await message.answer(texts.SEND_ONE_USAGE)
+        return
+
+    who_raw, text = parts[1], parts[2].strip()
+    if who_raw.lstrip("-").isdigit():
+        target_id = int(who_raw)
+    else:
+        target_id = await db.user_by_username(who_raw.lstrip("@"))
+
+    if target_id is None:
+        await message.answer(texts.GIVE_NOT_FOUND)
+        return
+
+    try:
+        await message.bot.send_message(
+            target_id, text, reply_markup=keyboards.broadcast_cta(config.webapp_url)
+        )
+    except TelegramAPIError as error:
+        await message.answer(texts.send_one_failed(str(error)[:120]))
+        return
+
+    await message.answer(texts.send_one_done(who_raw))
+
+
+@router.message(Command("send_all"))
+async def cmd_send_all(message: Message, db: Database, config: Config) -> None:
+    """/send_all текст — сообщение всем пользователям бота."""
+    await _start_broadcast(message, db, config, without_peer=False)
+
+
+@router.message(Command("send_new"))
+async def cmd_send_new(message: Message, db: Database, config: Config) -> None:
+    """/send_new текст — только тем, у кого ещё нет анкеты ChadMatch."""
+    await _start_broadcast(message, db, config, without_peer=True)
+
+
+@router.callback_query(F.data == "bcast:go")
+async def cb_broadcast(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """Отправляет одну порцию и предлагает продолжить."""
+    user = callback.from_user
+    if callback.message is None or not config.is_admin(user.id):
+        await callback.answer()
+        return
+
+    raw = await db.get_setting(f"bcast:{user.id}")
+    if not raw:
+        await callback.answer("Черновик не найден", show_alert=True)
+        return
+
+    draft = json.loads(raw)
+    await callback.answer("Отправляю…")
+
+    targets = await db.broadcast_batch(
+        draft["cursor"], BROADCAST_BATCH, draft["without_peer"]
+    )
+
+    markup = keyboards.broadcast_cta(config.webapp_url)
+
+    for target_id in targets:
+        try:
+            await callback.message.bot.send_message(
+                target_id, draft["text"], reply_markup=markup
+            )
+            draft["sent"] += 1
+        except TelegramAPIError:
+            # Заблокировал бота или удалил аккаунт — это норма, не ошибка
+            draft["failed"] += 1
+        except Exception:  # noqa: BLE001
+            draft["failed"] += 1
+        draft["cursor"] = target_id
+        # Telegram ограничивает скорость рассылки: без паузы часть писем
+        # просто не дойдёт
+        await asyncio.sleep(0.05)
+
+    done = len(targets) < BROADCAST_BATCH
+    await db.set_setting(f"bcast:{user.id}", json.dumps(draft))
+
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+    await callback.message.answer(
+        texts.broadcast_progress(draft["sent"], draft["failed"], done),
+        reply_markup=None if done else keyboards.broadcast_more(),
+    )
+
+
+@router.callback_query(F.data == "bcast:stop")
+async def cb_broadcast_stop(callback: CallbackQuery, db: Database, config: Config) -> None:
+    await callback.answer()
+    if callback.from_user and config.is_admin(callback.from_user.id):
+        await db.set_setting(f"bcast:{callback.from_user.id}", "")
+    if callback.message is not None:
+        with contextlib.suppress(TelegramAPIError):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(texts.BROADCAST_STOPPED)
+
+
 @router.message(Command("peer_open"))
 async def cmd_peer_open(message: Message, db: Database, config: Config) -> None:
     """/peer_open on|off — мгновенно открыть или закрыть ChadMatch всем."""
@@ -650,7 +811,8 @@ async def _send_next_card(
         )
         return
 
-    rows = await db.peer_next(user_id, limit=1)
+    skip_since = datetime.now(timezone.utc) - timedelta(hours=peer.SKIP_HOURS)
+    rows = await db.peer_next(user_id, limit=1, skip_since=skip_since)
     if rows:
         row = rows[0]
         data = await db.peer_photo(row["user_id"])
@@ -685,11 +847,14 @@ async def _next_seed(db: Database, user_id: int):
     Сначала пул из базы, потом папка репозитория: пул надёжнее, файлы из
     репозитория доезжают до функции не на всех конфигурациях сборки.
     """
-    from webapp.server import seed_files, seed_photo_from_folder
+    from webapp.server import _filler_identity, seed_files, seed_photo_from_folder
 
+    # Пропущенные исключаем наравне с оценёнными, иначе кнопка «Пропустить»
+    # возвращает тот же снимок по кругу.
     seen = await db.peer_seen(user_id)
-
-    from webapp.server import _filler_identity
+    seen |= await db.peer_skipped(
+        user_id, datetime.now(timezone.utc) - timedelta(hours=peer.SKIP_HOURS)
+    )
 
     for row in await db.peer_seed_list():
         key = row["key"]
@@ -719,57 +884,127 @@ async def cmd_rate(message: Message, db: Database, config: Config) -> None:
     await _send_next_card(message, db, user.id, config.webapp_url)
 
 
-@router.callback_query(F.data == "pwho")
-async def cb_peer_who(callback: CallbackQuery, db: Database, config: Config) -> None:
+async def _send_voter_card(
+    message: Message, db: Database, config: Config, user_id: int
+) -> None:
     """
-Показывает тех, кто недавно оценил, их балл и даёт ответить."""
-    await callback.answer()
-    user = callback.from_user
-    if callback.message is None or not _peer_open(config, user.id):
-        return
+    Показывает одного оценившего — того, кому ещё не ответили.
 
-    since = datetime.now(timezone.utc) - timedelta(days=7)
-    voters = await db.peer_recent_voters(user.id, since, limit=3)
+    По одной карточке за раз намеренно: пачка из нескольких сообщений
+    создаёт столько же параллельных веток, и после ответа на каждую бот
+    отвечает «анкеты закончились» по числу карточек.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    voters = await db.peer_recent_voters(user_id, since, limit=25)
 
-    # Отметим просмотр: баннер в приложении больше не нужен
-    await db.set_setting(
-        f"rated_seen:{user.id}",
-        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    seen = await db.peer_seen(user_id)
+    seen |= await db.peer_skipped(
+        user_id, datetime.now(timezone.utc) - timedelta(hours=peer.SKIP_HOURS)
     )
-
-    if not voters:
-        await callback.message.answer(texts.PEER_EMPTY)
-        return
-
-    seen = await db.peer_seen(user.id)
-    shown = 0
 
     for row in voters:
         voter_id = row["voter_id"]
+        target = f"u:{voter_id}"
+        if target in seen:
+            continue
+
         profile = await db.peer_profile(voter_id)
         data = await db.peer_photo(voter_id)
         if not profile or not data:
             continue
 
-        target = f"u:{voter_id}"
         tier = peer.TIER_BY_KEY.get(row["tier"])
-        # Тех, кого уже оценил, показываем без кнопок оценки
-        markup = None if target in seen else keyboards.peer_answer(target)
-        caption = texts.peer_voter_card(
-            profile["name"], profile["age"], tier.title if tier else "—"
-        )
-        if markup is None:
-            caption = f"{caption}\n\n<i>Ты уже оценил этого человека.</i>"
-
-        await callback.message.answer_photo(
+        await message.answer_photo(
             BufferedInputFile(data, filename="v.jpg"),
-            caption=caption,
-            reply_markup=markup,
+            caption=texts.peer_voter_card(
+                profile["name"], profile["age"], tier.title if tier else "—"
+            ),
+            reply_markup=keyboards.peer_answer(target),
         )
-        shown += 1
+        return
 
-    if not shown:
-        await callback.message.answer(texts.PEER_EMPTY)
+    # Всем ответили — предлагаем обычную очередь
+    await message.answer(
+        texts.PEER_WHO_DONE, reply_markup=keyboards.peer_empty(config.webapp_url)
+    )
+
+
+@router.callback_query(F.data == "pwho")
+async def cb_peer_who(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """Первая карточка из тех, кто оценил."""
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+
+    # Отмечаем просмотр: баннер в приложении больше не нужен
+    await db.set_setting(
+        f"rated_seen:{user.id}",
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    await _send_voter_card(callback.message, db, config, user.id)
+
+
+@router.callback_query(F.data.startswith("pwnext:"))
+async def cb_peer_who_next(
+    callback: CallbackQuery, db: Database, config: Config
+) -> None:
+    """Пропустить оценившего и показать следующего."""
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+
+    target = callback.data.split(":", 1)[1]
+    with contextlib.suppress(Exception):
+        await db.peer_skip(user.id, target)
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+
+    await _send_voter_card(callback.message, db, config, user.id)
+
+
+@router.callback_query(F.data.startswith("pvw:"))
+async def cb_peer_vote_back(
+    callback: CallbackQuery, db: Database, config: Config
+) -> None:
+    """Ответная оценка. После неё показываем следующего оценившего."""
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        await callback.answer()
+        return
+
+    _, tier_key, target = callback.data.split(":", 2)
+    chosen = peer.TIER_BY_KEY.get(tier_key)
+    if chosen is None or target == f"u:{user.id}":
+        await callback.answer("Не получилось", show_alert=True)
+        return
+
+    used = await db.peer_votes_since(
+        user.id,
+        datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+    )
+    if used >= peer.DAILY_VOTE_LIMIT:
+        await callback.answer("Лимит на сегодня", show_alert=True)
+        return
+
+    fresh = await db.peer_vote(user.id, target, chosen.key, chosen.score)
+    if fresh:
+        with contextlib.suppress(Exception):
+            await db.award_xp(user.id, f"peervote:{target}", 1)
+        if target.startswith("u:"):
+            with contextlib.suppress(Exception):
+                await _notify_rated(
+                    callback.message.bot, db, config, int(target[2:])
+                )
+
+    await callback.answer(
+        texts.peer_voted(chosen.title, max(0, peer.DAILY_VOTE_LIMIT - used - 1))
+    )
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+
+    await _send_voter_card(callback.message, db, config, user.id)
 
 
 @router.callback_query(F.data == "pclose")
@@ -789,12 +1024,24 @@ async def cb_peer_rate(callback: CallbackQuery, db: Database, config: Config) ->
     await _send_next_card(callback.message, db, user.id, config.webapp_url)
 
 
-@router.callback_query(F.data == "pnext")
+@router.callback_query(F.data.startswith("pnext"))
 async def cb_peer_next(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """
+    Пропуск карточки.
+
+    Пропуск записывается: без этого очередь берёт случайную анкету и легко
+    возвращает ту же самую — особенно когда доступных мало.
+    """
     await callback.answer()
     user = callback.from_user
     if callback.message is None or not _peer_open(config, user.id):
         return
+
+    target = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+    if target:
+        with contextlib.suppress(Exception):
+            await db.peer_skip(user.id, target)
+
     with contextlib.suppress(TelegramAPIError):
         await callback.message.delete()
     await _send_next_card(callback.message, db, user.id, config.webapp_url)
