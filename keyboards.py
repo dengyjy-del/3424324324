@@ -151,13 +151,16 @@ def peer_report_reasons(target: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def peer_demo_card(username: str) -> InlineKeyboardMarkup:
-    """Карточка для съёмки: как выглядит уведомление об оценке."""
+def peer_demo_card(username: str = "") -> InlineKeyboardMarkup:
+    """
+    Карточка для съёмки: как выглядит уведомление об оценке.
+
+    Кнопки «Написать» здесь нет намеренно: прямая переписка после низкой
+    оценки — самый короткий путь к конфликту, и убирать её потом сложнее,
+    чем не добавлять сейчас.
+    """
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="⭐ Оценить", callback_data="demo:rate"),
-        InlineKeyboardButton(text="✉️ Написать", url=f"https://t.me/{username}"),
-    )
+    builder.row(InlineKeyboardButton(text="⭐ Оценить в ответ", callback_data="demo:rate"))
     return builder.as_markup()
 
 
@@ -172,4 +175,45 @@ def peer_menu(webapp_url: str = "") -> InlineKeyboardMarkup:
         )
     builder.row(InlineKeyboardButton(text="⭐ Оценивать здесь", callback_data="prate"))
     builder.row(InlineKeyboardButton(text="← Назад", callback_data="back"))
+    return builder.as_markup()
+
+
+def peer_rated(webapp_url: str = "") -> InlineKeyboardMarkup:
+    """Уведомление об оценках: посмотреть, кто оценил, или открыть приложение."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="👀 Кто оценил", callback_data="pwho")
+    )
+    if webapp_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔥 Открыть ChadMatch", web_app=WebAppInfo(url=webapp_url)
+            )
+        )
+    return builder.as_markup()
+
+
+def peer_answer(target: str) -> InlineKeyboardMarkup:
+    """Карточка того, кто тебя оценил: ответить оценкой или пропустить."""
+    from peer import PEER_TIERS
+
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    for tier in PEER_TIERS:
+        row.append(
+            InlineKeyboardButton(
+                text=f"{tier.emoji} {tier.title}",
+                callback_data=f"pv:{tier.key}:{target}",
+            )
+        )
+        if len(row) == 2:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+
+    builder.row(
+        InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
+        InlineKeyboardButton(text="✖️ Закрыть", callback_data="pclose"),
+    )
     return builder.as_markup()

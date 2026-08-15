@@ -1887,3 +1887,42 @@ h3 {
   border-color: rgba(255, 61, 113, 0.35);
   color: var(--aura-rose);
 }
+
+
+/* ── Управление своей анкетой и уведомление об оценках ──── */
+
+.pr-mine-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pr-mine-actions .btn { margin: 0; flex: 1; }
+
+.btn.danger {
+  border-color: rgba(255, 61, 113, 0.32);
+  color: var(--aura-rose);
+}
+
+.rated-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  border-color: rgba(0, 224, 198, 0.28);
+}
+
+/* Пульсирующая точка: замечается боковым зрением, но не кричит */
+.rated-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--aura-mint);
+  flex-shrink: 0;
+  animation: ratedPulse 2s ease-in-out infinite;
+}
+
+@keyframes ratedPulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0, 224, 198, 0.45); }
+  50% { opacity: 0.65; box-shadow: 0 0 0 7px rgba(0, 224, 198, 0); }
+}

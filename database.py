@@ -214,6 +214,16 @@ class BaseDatabase(ABC):
     async def peer_result(self, target: str) -> dict: ...
 
     @abstractmethod
+    async def peer_votes_received(self, user_id: int, since: datetime) -> int:
+        """Сколько оценок пришло на анкету после указанного момента."""
+
+    @abstractmethod
+    async def peer_recent_voters(
+        self, user_id: int, since: datetime, limit: int = 5
+    ) -> list[dict]:
+        """Кто недавно оценил и какой балл поставил."""
+
+    @abstractmethod
     async def peer_add_report(
         self, reporter_id: int, target: str, reason: str
     ) -> int: ...
@@ -953,6 +963,31 @@ class SQLiteDatabase(BaseDatabase):
             "average": round(float(row["avg"] or 0), 2),
             "spread": spread,
         }
+
+    async def peer_votes_received(self, user_id: int, since: datetime) -> int:
+        async with self.conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM peer_votes
+             WHERE target = ? AND created_at > ?
+            """,
+            (f"u:{user_id}", since.isoformat(timespec="seconds")),
+        ) as cursor:
+            return int((await cursor.fetchone())["n"])
+
+    async def peer_recent_voters(
+        self, user_id: int, since: datetime, limit: int = 5
+    ) -> list[int]:
+        async with self.conn.execute(
+            """
+              SELECT v.voter_id, v.tier FROM peer_votes v
+                JOIN peer_profiles p ON p.user_id = v.voter_id
+               WHERE v.target = ? AND v.created_at > ?
+                 AND p.status = 'active' AND p.photo IS NOT NULL
+            ORDER BY v.created_at DESC LIMIT ?
+            """,
+            (f"u:{user_id}", since.isoformat(timespec="seconds"), limit),
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
 
     async def peer_add_report(
         self, reporter_id: int, target: str, reason: str
@@ -1858,6 +1893,30 @@ class PostgresDatabase(BaseDatabase):
             "average": round(float(row["avg"] or 0), 2),
             "spread": {r["tier"]: int(r["n"]) for r in rows},
         }
+
+    async def peer_votes_received(self, user_id: int, since: datetime) -> int:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT COUNT(*) FROM peer_votes WHERE target = $1 AND created_at > $2",
+                f"u:{user_id}", since,
+            )
+        return int(value or 0)
+
+    async def peer_recent_voters(
+        self, user_id: int, since: datetime, limit: int = 5
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                  SELECT v.voter_id, v.tier FROM peer_votes v
+                    JOIN peer_profiles p ON p.user_id = v.voter_id
+                   WHERE v.target = $1 AND v.created_at > $2
+                     AND p.status = 'active' AND p.photo IS NOT NULL
+                ORDER BY v.created_at DESC LIMIT $3
+                """,
+                f"u:{user_id}", since, limit,
+            )
+        return [dict(r) for r in rows]
 
     async def peer_add_report(
         self, reporter_id: int, target: str, reason: str

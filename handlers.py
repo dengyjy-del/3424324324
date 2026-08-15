@@ -545,6 +545,34 @@ async def _peer_save_from_message(
     return True
 
 
+async def _notify_rated(bot, db: Database, config: Config, owner_id: int) -> None:
+    """Копит уведомления и шлёт не чаще, чем раз в NOTIFY_COOLDOWN_MINUTES."""
+    now = datetime.now(timezone.utc)
+    raw = await db.get_setting(f"rated_notified:{owner_id}")
+
+    try:
+        last = datetime.fromisoformat(raw) if raw else now - timedelta(days=7)
+    except (TypeError, ValueError):
+        last = now - timedelta(days=7)
+
+    if now - last < timedelta(minutes=peer.NOTIFY_COOLDOWN_MINUTES):
+        return
+
+    count = await db.peer_votes_received(owner_id, last)
+    if count < 1:
+        return
+
+    await db.set_setting(
+        f"rated_notified:{owner_id}", now.isoformat(timespec="seconds")
+    )
+    with contextlib.suppress(TelegramAPIError):
+        await bot.send_message(
+            owner_id,
+            texts.peer_rated_notice(count),
+            reply_markup=keyboards.peer_rated(config.webapp_url),
+        )
+
+
 async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
     """Показывает следующую анкету из очереди."""
     profile = await db.peer_profile(user_id)
@@ -627,6 +655,67 @@ async def cmd_rate(message: Message, db: Database, config: Config) -> None:
     await _send_next_card(message, db, user.id)
 
 
+@router.callback_query(F.data == "pwho")
+async def cb_peer_who(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """
+Показывает тех, кто недавно оценил, их балл и даёт ответить."""
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    voters = await db.peer_recent_voters(user.id, since, limit=3)
+
+    # Отметим просмотр: баннер в приложении больше не нужен
+    await db.set_setting(
+        f"rated_seen:{user.id}",
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+    if not voters:
+        await callback.message.answer(texts.PEER_EMPTY)
+        return
+
+    seen = await db.peer_seen(user.id)
+    shown = 0
+
+    for row in voters:
+        voter_id = row["voter_id"]
+        profile = await db.peer_profile(voter_id)
+        data = await db.peer_photo(voter_id)
+        if not profile or not data:
+            continue
+
+        target = f"u:{voter_id}"
+        tier = peer.TIER_BY_KEY.get(row["tier"])
+        # Тех, кого уже оценил, показываем без кнопок оценки
+        markup = None if target in seen else keyboards.peer_answer(target)
+        caption = texts.peer_voter_card(
+            profile["name"], profile["age"], tier.title if tier else "—"
+        )
+        if markup is None:
+            caption = f"{caption}\n\n<i>Ты уже оценил этого человека.</i>"
+
+        await callback.message.answer_photo(
+            BufferedInputFile(data, filename="v.jpg"),
+            caption=caption,
+            reply_markup=markup,
+        )
+        shown += 1
+
+    if not shown:
+        await callback.message.answer(texts.PEER_EMPTY)
+
+
+@router.callback_query(F.data == "pclose")
+async def cb_peer_close(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        with contextlib.suppress(TelegramAPIError):
+            await callback.message.delete()
+
+
 @router.callback_query(F.data == "prate")
 async def cb_peer_rate(callback: CallbackQuery, db: Database, config: Config) -> None:
     await callback.answer()
@@ -672,6 +761,11 @@ async def cb_peer_vote(callback: CallbackQuery, db: Database, config: Config) ->
     if fresh:
         with contextlib.suppress(Exception):
             await db.award_xp(user.id, f"peervote:{target}", 1)
+        if target.startswith("u:"):
+            with contextlib.suppress(Exception):
+                await _notify_rated(
+                    callback.message.bot, db, config, int(target[2:])
+                )
 
     await callback.answer(
         texts.peer_voted(chosen.title, max(0, peer.DAILY_VOTE_LIMIT - used - 1))
@@ -935,11 +1029,10 @@ async def cb_demo_peer_card(
     with contextlib.suppress(TelegramAPIError):
         await callback.message.delete()
 
-    me = await callback.message.bot.get_me()
     await callback.message.answer_photo(
         saved["photo"],
         caption=texts.peer_demo_card(saved["nick"], tier.title),
-        reply_markup=keyboards.peer_demo_card(me.username or ""),
+        reply_markup=keyboards.peer_demo_card(),
     )
 
 

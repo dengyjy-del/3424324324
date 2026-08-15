@@ -851,3 +851,31 @@ PEER_CLOSED = (
     "Режим взаимных оценок пока в закрытом тестировании.\n"
     "<i>Следи за каналом — сообщим о запуске.</i>"
 )
+
+
+def peer_rated_notice(count: int) -> str:
+    """Уведомление «тебя оценили». Кто и на сколько — по кнопке."""
+    if count == 1:
+        head = "Тебя оценили"
+    elif count < 5:
+        head = f"Тебя оценили {count} раза"
+    else:
+        head = f"Тебя оценили {count} раз"
+
+    return (
+        f"🔥 <b>{head}</b>\n"
+        f"{LINE}\n"
+        "Смотри, кто и на сколько — и ответь оценкой."
+    )
+
+
+def peer_voter_card(name: str, age: int, tier_title: str) -> str:
+    who = f"<b>{safe(name)}</b>"
+    if age:
+        who += f", {age}"
+    return f"{who}\n\nОценил тебя на <b>{safe(tier_title)}</b>\n\nОтветишь? 👇"
+
+
+PEER_VOTER_CARD = "Этот человек недавно тебя оценил. Ответишь?"
+
+PEER_PROFILE_UPDATED = "✅ Анкета обновлена."

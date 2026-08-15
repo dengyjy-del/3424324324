@@ -36,6 +36,7 @@ from webapp.auth import AuthError, TelegramUser, verify_init_data
 from aiogram.types import BufferedInputFile
 
 import keyboards
+import texts
 from webapp.guides import GUIDES
 
 logger = logging.getLogger("looksmax.webapp")
@@ -747,6 +748,18 @@ def create_app(
         if profile:
             target = f"u:{user_id}"
             result = await db.peer_result(target)
+
+            # Новые оценки с прошлого захода — для баннера в профиле
+            raw_seen = await db.get_setting(f"rated_seen:{user_id}")
+            try:
+                seen_at = (
+                    datetime.fromisoformat(raw_seen)
+                    if raw_seen
+                    else datetime.now(timezone.utc) - timedelta(days=30)
+                )
+            except ValueError:
+                seen_at = datetime.now(timezone.utc) - timedelta(days=30)
+            fresh_votes = await db.peer_votes_received(user_id, seen_at)
             hidden_until = profile.get("hidden_until")
             if isinstance(hidden_until, datetime):
                 hidden_until = hidden_until.isoformat(timespec="seconds")
@@ -767,6 +780,7 @@ def create_app(
                     else None
                 ),
                 "spread": result["spread"],
+                "new_votes": fresh_votes,
             }
 
         return state
@@ -834,8 +848,19 @@ def create_app(
 
     @app.delete("/api/peer/profile")
     async def peer_remove(user: TelegramUser = Depends(current_user)) -> dict:
+        """Удаление анкеты. Фото стирается вместе с ней."""
         await _peer_require_admin(user.id)
         await db.peer_delete(user.id)
+        return {"ok": True}
+
+    @app.post("/api/peer/seen")
+    async def peer_seen_mark(user: TelegramUser = Depends(current_user)) -> dict:
+        """Отмечает, что новые оценки просмотрены — баннер больше не нужен."""
+        await _peer_require_admin(user.id)
+        await db.set_setting(
+            f"rated_seen:{user.id}",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
         return {"ok": True}
 
     @app.get("/api/peer/next")
@@ -1048,12 +1073,49 @@ def create_app(
             raise HTTPException(status_code=429, detail="Лимит оценок на сегодня")
 
         fresh = await db.peer_vote(user.id, target, chosen.key, chosen.score)
+        if fresh and target.startswith("u:"):
+            with contextlib.suppress(ValueError):
+                await _notify_rated(int(target[2:]))
         if fresh:
             # За оценку чужой анкеты капают XP: так режим кормит основную
             # механику, а не живёт отдельно от неё.
             await db.award_xp(user.id, f"peervote:{target}", 1)
 
         return {"ok": True, "counted": fresh, "votes_left": max(0, peer.DAILY_VOTE_LIMIT - used - 1)}
+
+    async def _notify_rated(owner_id: int) -> None:
+        """
+        Сообщает владельцу анкеты, что его оценили.
+
+        Уведомления копятся: отдельное сообщение на каждую оценку быстро
+        превратило бы бота в спам, и человек его отключит. Поэтому не чаще
+        раза в полчаса, зато с накопленным счётчиком.
+        """
+        if bot is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        raw = await db.get_setting(f"rated_notified:{owner_id}")
+
+        try:
+            last = datetime.fromisoformat(raw) if raw else now - timedelta(days=7)
+        except ValueError:
+            last = now - timedelta(days=7)
+
+        if now - last < timedelta(minutes=peer.NOTIFY_COOLDOWN_MINUTES):
+            return
+
+        count = await db.peer_votes_received(owner_id, last)
+        if count < 1:
+            return
+
+        await db.set_setting(f"rated_notified:{owner_id}", now.isoformat(timespec="seconds"))
+        with contextlib.suppress(Exception):
+            await bot.send_message(
+                owner_id,
+                texts.peer_rated_notice(count),
+                reply_markup=keyboards.peer_rated(config.webapp_url),
+            )
 
     @app.post("/api/peer/report")
     async def peer_report(

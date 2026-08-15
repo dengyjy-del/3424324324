@@ -1213,6 +1213,37 @@ function initThemes() {
 
 const peerState = { deck: [], current: null, cfg: null, photo: null };
 
+/**
+ * Фото анкет отдаются по подписи Telegram, а тег <img> не умеет слать
+ * заголовки — поэтому качаем сами и подставляем ссылку на скачанное.
+ * Снимки из папки раздаёт CDN, там подпись не нужна.
+ */
+const photoCache = new Map();
+
+async function photoUrl(path) {
+  if (!path) return "";
+  if (path.startsWith("/seed/")) return path;
+  if (photoCache.has(path)) return photoCache.get(path);
+
+  const response = await fetch(path, {
+    headers: { "X-Init-Data": state.initData },
+  });
+  if (!response.ok) throw new Error("Фото недоступно");
+
+  const url = URL.createObjectURL(await response.blob());
+  photoCache.set(path, url);
+  return url;
+}
+
+/** Подставляет фото в элемент, не роняя экран при сбое. */
+async function setPhoto(element, path) {
+  try {
+    element.src = await photoUrl(path);
+  } catch (_) {
+    element.removeAttribute("src");
+  }
+}
+
 /** Ужимаем сильнее, чем для скана: снимок хранится на сервере. */
 async function shrinkPhoto(file) {
   const bitmap = await createImageBitmap(file);
@@ -1282,19 +1313,96 @@ async function loadPeer() {
     return;
   }
 
-  // Анкета активна: показываем итог и очередь
+  // Анкета активна: показываем итог, управление и очередь
   $("pr-mine").classList.remove("hidden");
-  $("pr-mine").className = "glass pad pr-status";
+  $("pr-mine").className = "glass pad";
   $("pr-mine").innerHTML =
+    `<div class="pr-status">` +
     `<div style="min-width:0"><h3>${profile.name}, ${profile.age}</h3>` +
     `<p class="tiny" style="margin-top:3px">` +
     (profile.tier
       ? `${profile.votes} оценок · ${profile.tier}`
       : `${profile.votes} из 3 оценок до результата`) +
     `</p></div>` +
-    `<span class="pr-status-value">${profile.tier ? profile.average : "—"}</span>`;
+    `<span class="pr-status-value">${profile.tier ? profile.average : "—"}</span>` +
+    `</div>` +
+    `<div class="pr-mine-actions">` +
+    `<button class="btn btn-glass" id="pr-edit">Изменить</button>` +
+    `<button class="btn btn-glass danger" id="pr-drop">Удалить</button>` +
+    `</div>`;
+
+  $("pr-edit").addEventListener("click", () => {
+    haptic();
+    $("pr-name").value = profile.name;
+    $("pr-age").value = profile.age;
+    $("pr-form-note").textContent =
+      "Без нового фото останется прежнее. Имя и возраст сохранятся сразу.";
+    peerShow("pr-form");
+  });
+
+  $("pr-drop").addEventListener("click", () => confirmDrop());
+
+  // Кто-то оценил, пока тебя не было
+  if (profile.new_votes > 0) {
+    showRatedBanner(profile.new_votes);
+  }
 
   await loadDeck();
+}
+
+/** Подтверждение через нативный диалог Telegram, если он доступен. */
+function askConfirm(title, text) {
+  const message = `${title}\n\n${text}`;
+  if (tg?.showConfirm) {
+    return new Promise((done) => tg.showConfirm(message, (ok) => done(Boolean(ok))));
+  }
+  return Promise.resolve(window.confirm(message));
+}
+
+/** Баннер «тебя оценили» — показывается один раз до просмотра. */
+function showRatedBanner(count) {
+  const word = count === 1 ? "оценка" : count < 5 ? "оценки" : "оценок";
+  const box = $("pr-rated");
+  box.classList.remove("hidden");
+  box.innerHTML =
+    `<span class="rated-dot"></span>` +
+    `<div style="min-width:0"><h3>Новых ${word}: ${count}</h3>` +
+    `<p class="tiny" style="margin-top:3px">Кто-то оценил твою анкету, ` +
+    `пока тебя не было</p></div>` +
+    `<button class="shop-price" id="pr-rated-ok">Ок</button>`;
+
+  $("pr-rated-ok").addEventListener("click", async () => {
+    haptic();
+    box.classList.add("hidden");
+    // Отмечаем просмотр, чтобы баннер не всплывал снова
+    try {
+      await api("/api/peer/seen", { method: "POST" });
+    } catch (_) {}
+    loadPeer();
+  });
+}
+
+/* Подтверждение удаления: анкета и фото уходят безвозвратно */
+async function confirmDrop() {
+  haptic("medium");
+  const ok = await askConfirm(
+    "Удалить анкету?",
+    "Фото будет стёрто, полученные оценки исчезнут. Создать заново можно в любой момент."
+  );
+  if (!ok) return;
+
+  try {
+    await api("/api/peer/profile", { method: "DELETE" });
+    notifySuccess();
+    toast("Анкета удалена");
+    peerState.photo = null;
+    $("pr-photo").classList.remove("filled");
+    $("pr-name").value = "";
+    $("pr-age").value = "";
+    await loadPeer();
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function loadDeck() {
@@ -1320,7 +1428,10 @@ function showNextCard() {
   $("pr-empty").classList.toggle("hidden", Boolean(card));
   if (!card) return;
 
-  $("pr-card-img").src = card.photo;
+  setPhoto($("pr-card-img"), card.photo);
+
+  // Подгружаем следующую заранее, чтобы карточка не мигала пустотой
+  if (peerState.deck[0]) photoUrl(peerState.deck[0].photo).catch(() => {});
   $("pr-card-name").textContent = card.name
     ? `${card.name}${card.age ? ", " + card.age : ""}`
     : "";
@@ -1384,8 +1495,9 @@ async function loadSeedList() {
     box.innerHTML = data.items
       .map(
         (item) => `
-        <div class="seed-row${item.custom ? "" : " auto"}" data-key="${item.key}">
-          <img src="${item.photo}" alt="">
+        <div class="seed-row${item.custom ? "" : " auto"}" data-key="${item.key}"
+             data-photo="${item.photo}">
+          <img alt="">
           <div class="seed-fields">
             <input class="seed-name" value="${item.name}" maxlength="24" placeholder="Имя">
             <input class="seed-age" value="${item.age}" inputmode="numeric" maxlength="2">
@@ -1399,6 +1511,7 @@ async function loadSeedList() {
       .join("");
 
     box.querySelectorAll(".seed-row").forEach((row) => {
+      setPhoto(row.querySelector("img"), row.dataset.photo);
       row.querySelector('[data-act="save"]').addEventListener("click", () =>
         saveSeed(row)
       );
