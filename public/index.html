@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#07080d">
 <title>LOOKSCORE</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.v2.css">
+<link rel="stylesheet" href="/static/app.v3.css">
 </head>
 <body>
 
@@ -595,6 +595,10 @@
         Добавить фотографии
       </button>
       <input type="file" id="pr-seed-files" accept="image/*" multiple class="hidden">
+      <button class="btn btn-glass" id="pr-seed-toggle" style="margin-top:8px">
+        Управлять анкетами
+      </button>
+      <div class="seed-list hidden" id="pr-seed-list"></div>
     </div>
 
     <div class="glass pad hidden" id="pr-empty">
@@ -673,6 +677,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<script type="module" src="/static/app.v2.js"></script>
+<script type="module" src="/static/app.v3.js"></script>
 </body>
 </html>

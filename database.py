@@ -235,6 +235,15 @@ class BaseDatabase(ABC):
     async def peer_seed_photo(self, key: str) -> bytes | None: ...
 
     @abstractmethod
+    async def peer_seed_update(
+        self, key: str, name: str | None, age: int | None
+    ) -> bool:
+        """Меняет имя и возраст у снимка наполнения."""
+
+    @abstractmethod
+    async def peer_seed_delete(self, key: str) -> bool: ...
+
+    @abstractmethod
     async def peer_seed_clear(self) -> int: ...
 
     @abstractmethod
@@ -991,6 +1000,20 @@ class SQLiteDatabase(BaseDatabase):
         ) as cursor:
             row = await cursor.fetchone()
         return bytes(row["photo"]) if row else None
+
+    async def peer_seed_update(
+        self, key: str, name: str | None, age: int | None
+    ) -> bool:
+        cursor = await self.conn.execute(
+            "UPDATE peer_seed SET name = ?, age = ? WHERE key = ?", (name, age, key)
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def peer_seed_delete(self, key: str) -> bool:
+        cursor = await self.conn.execute("DELETE FROM peer_seed WHERE key = ?", (key,))
+        await self.conn.commit()
+        return cursor.rowcount > 0
 
     async def peer_seed_clear(self) -> int:
         cursor = await self.conn.execute("DELETE FROM peer_seed")
@@ -1883,6 +1906,20 @@ class PostgresDatabase(BaseDatabase):
                 "SELECT photo FROM peer_seed WHERE key = $1", key
             )
         return bytes(value) if value else None
+
+    async def peer_seed_update(
+        self, key: str, name: str | None, age: int | None
+    ) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE peer_seed SET name = $1, age = $2 WHERE key = $3", name, age, key
+            )
+        return result.endswith("1")
+
+    async def peer_seed_delete(self, key: str) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM peer_seed WHERE key = $1", key)
+        return result.endswith("1")
 
     async def peer_seed_clear(self) -> int:
         async with self.pool.acquire() as conn:

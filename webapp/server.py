@@ -279,6 +279,7 @@ def create_app(
             # иначе приглашения из зеркала уводили бы на основного бота.
             "bot_username": await configured_bot_name(user.bot_id),
             "is_admin": config.is_admin(user.id),
+            "peer_available": config.peer_allowed(user.id),
             "theme": await db.get_theme(user.id) or "classic",
             "model_version": rating.MODEL_VERSION,
             "stats": _stats_payload(stats),
@@ -962,6 +963,58 @@ def create_app(
         added = await db.peer_seed_add(key, payload, user.id, name, age)
         pool = await db.peer_seed_list()
         return {"ok": True, "added": added, "total": len(pool)}
+
+    @app.get("/api/peer/seedlist")
+    async def peer_seed_list(user: TelegramUser = Depends(current_user)) -> dict:
+        """Список анкет наполнения с итоговыми именами и возрастом."""
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+
+        items = []
+        for row in await db.peer_seed_list():
+            name, age = _filler_identity(row["key"], row.get("name"), row.get("age"))
+            items.append(
+                {
+                    "key": row["key"],
+                    "name": name,
+                    "age": age,
+                    # Отличаем заданное вручную от выведенного из снимка:
+                    # владельцу важно видеть, что он уже поправил.
+                    "custom": bool(row.get("name") and row.get("age")),
+                    "photo": f"/api/peer/seed/{row['key']}",
+                }
+            )
+        return {"items": items}
+
+    @app.post("/api/peer/seedlist")
+    async def peer_seed_edit(
+        key: str = Form(...),
+        name: str = Form(default=""),
+        age: int = Form(default=0),
+        user: TelegramUser = Depends(current_user),
+    ) -> dict:
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+
+        clean = peer.clean_name(name)
+        problem = peer.name_error(clean) or peer.age_error(age)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
+        if not await db.peer_seed_update(key, clean, age):
+            raise HTTPException(status_code=404, detail="Анкета не найдена")
+
+        return {"ok": True, "name": clean, "age": age}
+
+    @app.delete("/api/peer/seedlist/{key}")
+    async def peer_seed_remove(
+        key: str, user: TelegramUser = Depends(current_user)
+    ) -> dict:
+        if not config.is_admin(user.id):
+            raise HTTPException(status_code=403, detail="Только для владельца")
+
+        removed = await db.peer_seed_delete(key)
+        return {"ok": True, "removed": removed}
 
     @app.get("/api/peer/diag")
     async def peer_diag(user: TelegramUser = Depends(current_user)) -> dict:
