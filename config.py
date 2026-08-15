@@ -37,6 +37,8 @@ class Config:
     demo_ttl_minutes: float
     admin_ids: tuple[int, ...]
     peer_ids: tuple[int, ...]
+    terms_url: str
+    privacy_url: str
     peer_open: bool
 
     # мини-апп
@@ -98,8 +100,8 @@ class Config:
 
     def peer_allowed(self, user_id: int) -> bool:
         """
-        Кому виден ChadMatch. Отдельно от админских прав: тестировщику нужен
-        доступ к разделу, а не к модерации, режиму съёмки и разметке.
+        Кому виден ChadMatch. Владелец и список PEER_IDS проходят всегда —
+        чтобы при выключенном режиме оставалась возможность его проверить.
         """
         return self.peer_open or self.is_admin(user_id) or user_id in self.peer_ids
 
@@ -317,7 +319,13 @@ def load_config() -> Config:
         demo_ttl_minutes=_get_float("DEMO_TTL_MINUTES", 30.0),
         admin_ids=_get_ids("ADMIN_IDS"),
         peer_ids=_get_ids("PEER_IDS"),
-        peer_open=(os.getenv("PEER_OPEN") or "").strip().lower() in ("1", "true", "yes"),
+        terms_url=(os.getenv("TERMS_URL") or "").strip(),
+        privacy_url=(os.getenv("PRIVACY_URL") or "").strip(),
+        # По умолчанию режим открыт всем. Закрыть можно переменной
+        # PEER_OPEN=0 или на лету командой /peer_open off — при открытом
+        # доступе выключатель без передеплоя важнее, чем экономия строчки.
+        peer_open=(os.getenv("PEER_OPEN") or "1").strip().lower()
+        not in ("0", "false", "no", "off"),
         webhook_secret=(os.getenv("WEBHOOK_SECRET") or "").strip(),
         setup_key=(os.getenv("SETUP_KEY") or "").strip(),
         webapp_url=_webapp_url(),

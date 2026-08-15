@@ -19,6 +19,7 @@ const state = {
   report: null,
   lastScan: null,
   theme: "classic",
+  legal: {},
   cardTheme: 0,
   refCode: "",
 };
@@ -1276,6 +1277,7 @@ async function loadPeer() {
   peerState.cfg = state;
   loadSeedBox();
   $("pr-consent-text").textContent = state.consent_text;
+  paintLegal("pr-legal", state.legal || {}, "Перед началом прочитай");
   $("pr-agree-label").textContent =
     `Мне есть ${state.min_age}, на фото я, и я согласен с правилами`;
 
@@ -1691,6 +1693,19 @@ async function sendReport(reason) {
 
 /* ── Профиль ─────────────────────────────────────────────── */
 
+/** Ссылки на условия и политику. Без адресов блок просто не показывается. */
+function paintLegal(target, legal, prefix) {
+  const box = $(target);
+  if (!box) return;
+
+  const parts = [];
+  if (legal?.terms) parts.push(`<a href="${legal.terms}" target="_blank">условия</a>`);
+  if (legal?.privacy)
+    parts.push(`<a href="${legal.privacy}" target="_blank">политику</a>`);
+
+  box.innerHTML = parts.length ? `${prefix} ${parts.join(" и ")}` : "";
+}
+
 function safePaint(draw) {
   try {
     draw();
@@ -1960,6 +1975,10 @@ async function boot() {
 
     state.channel = session.channel || state.channel;
     state.brand = session.brand || state.brand;
+    state.legal = session.legal || {};
+    safePaint(() =>
+      paintLegal("pf-legal", state.legal, "Пользуясь приложением, ты принимаешь")
+    );
     // Разметка — только владельцу, ChadMatch — всем, у кого есть доступ
     if (session.is_admin) $("tab-label").classList.remove("hidden");
     if (session.peer_available) $("tab-peer").classList.remove("hidden");

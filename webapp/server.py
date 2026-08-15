@@ -280,7 +280,8 @@ def create_app(
             # иначе приглашения из зеркала уводили бы на основного бота.
             "bot_username": await configured_bot_name(user.bot_id),
             "is_admin": config.is_admin(user.id),
-            "peer_available": config.peer_allowed(user.id),
+            "peer_available": await _peer_enabled(user.id),
+            "legal": {"terms": config.terms_url, "privacy": config.privacy_url},
             "theme": await db.get_theme(user.id) or "classic",
             "model_version": rating.MODEL_VERSION,
             "stats": _stats_payload(stats),
@@ -467,7 +468,7 @@ def create_app(
 
         # Показатели ChadMatch идут рядом со сканами: это два ответа на один
         # вопрос, и пользователю интереснее видеть их вместе.
-        available = config.peer_allowed(user.id)
+        available = await _peer_enabled(user.id)
         peer_block = {"available": available, "has_profile": False, "votes": 0, "rated": 0}
 
         if available:
@@ -716,13 +717,21 @@ def create_app(
 
     # ═══════════════════ РЕЖИМ ВЗАИМНЫХ ОЦЕНОК ════════════════════════
 
+    async def _peer_enabled(user_id: int) -> bool:
+        """
+        Доступен ли ChadMatch. Кроме настроек сборки учитывается рубильник
+        в базе: пользовательский контент иногда нужно остановить немедленно,
+        а передеплой на это тратить нельзя.
+        """
+        if config.is_admin(user_id) or user_id in config.peer_ids:
+            return True
+        if (await db.get_setting("peer_off") or "") == "1":
+            return False
+        return config.peer_open
+
     async def _peer_require_admin(user_id: int) -> None:
-        """
-        Доступ к разделу. Открывается тремя способами: владельцу, списку
-        тестировщиков из PEER_IDS и всем сразу через PEER_OPEN=1.
-        """
-        if not config.peer_allowed(user_id):
-            raise HTTPException(status_code=403, detail="Раздел пока закрыт")
+        if not await _peer_enabled(user_id):
+            raise HTTPException(status_code=403, detail="Раздел временно закрыт")
 
     async def _peer_state(user_id: int) -> dict:
         profile = await db.peer_profile(user_id)
@@ -733,6 +742,7 @@ def create_app(
             "min_age": peer.PEER_MIN_AGE,
             "terms_version": peer.TERMS_VERSION,
             "consent_text": peer.CONSENT_TEXT,
+            "legal": {"terms": config.terms_url, "privacy": config.privacy_url},
             "tiers": [
                 {"key": t.key, "emoji": t.emoji, "title": t.title}
                 for t in peer.PEER_TIERS

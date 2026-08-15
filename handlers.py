@@ -110,6 +110,15 @@ async def cmd_ref(message: Message, db: Database, config: Config) -> None:
         await message.answer(f"❌ {result['error']}")
 
 
+@router.message(Command("terms"))
+async def cmd_terms(message: Message, config: Config) -> None:
+    """Условия и политика — по требованию правил Telegram должны быть доступны."""
+    await message.answer(
+        texts.legal(config.terms_url, config.privacy_url, config.brand_name),
+        reply_markup=keyboards.legal_links(config.terms_url, config.privacy_url),
+    )
+
+
 @router.message(Command("myid"))
 async def cmd_myid(message: Message) -> None:
     if message.from_user is not None:
@@ -411,8 +420,22 @@ async def cmd_demo_off(message: Message, demo: DemoState) -> None:
 
 
 def _peer_open(config: Config, user_id: int) -> bool:
-    """Кому виден ChadMatch: владельцу, списку PEER_IDS или всем."""
+    """
+    Доступен ли ChadMatch по настройкам сборки.
+
+    Рубильник из базы проверяется отдельно в _peer_live: синхронной функции
+    нужен доступ к базе, а он есть не везде.
+    """
     return config.peer_allowed(user_id)
+
+
+async def _peer_live(db: Database, config: Config, user_id: int) -> bool:
+    """То же, но с учётом выключателя из базы."""
+    if config.is_admin(user_id) or user_id in config.peer_ids:
+        return True
+    if (await db.get_setting("peer_off") or "") == "1":
+        return False
+    return config.peer_open
 
 
 async def _peer_state_for(db: Database, user_id: int) -> dict:
@@ -443,10 +466,10 @@ async def _peer_state_for(db: Database, user_id: int) -> dict:
 @router.message(Command("peer"))
 async def cmd_peer(message: Message, db: Database, config: Config) -> None:
     user = message.from_user
-    if user is None or not _peer_open(config, user.id):
+    if user is None or not await _peer_live(db, config, user.id):
         return
     await _remember(message, db)
-    await message.answer(texts.peer_intro(await _peer_state_for(db, user.id)))
+    await _show_peer_menu(message, db, config, user.id)
 
 
 @router.message(Command("peer_delete"))
@@ -456,6 +479,27 @@ async def cmd_peer_delete(message: Message, db: Database, config: Config) -> Non
         return
     await db.peer_delete(user.id)
     await message.answer(texts.PEER_DELETED)
+
+
+@router.message(Command("peer_open"))
+async def cmd_peer_open(message: Message, db: Database, config: Config) -> None:
+    """/peer_open on|off — мгновенно открыть или закрыть ChadMatch всем."""
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    parts = (message.text or "").split()
+    mode = parts[1].lower() if len(parts) > 1 else ""
+
+    if mode in ("off", "выкл", "0"):
+        await db.set_setting("peer_off", "1")
+        await message.answer(texts.PEER_SWITCH_OFF)
+    elif mode in ("on", "вкл", "1"):
+        await db.set_setting("peer_off", "")
+        await message.answer(texts.PEER_SWITCH_ON)
+    else:
+        closed = (await db.get_setting("peer_off") or "") == "1"
+        await message.answer(texts.peer_switch_status(not closed))
 
 
 @router.message(Command("seed"))
@@ -495,10 +539,21 @@ async def cmd_seed(message: Message, db: Database, config: Config) -> None:
 
 @router.message(Command("peer_stats"))
 async def cmd_peer_stats(message: Message, db: Database, config: Config) -> None:
+    """/peer_stats [часов] — сводка по режиму. Только для владельца."""
     user = message.from_user
     if user is None or not config.admin_ids or not config.is_admin(user.id):
         return
-    await message.answer(texts.peer_admin_stats(await db.peer_stats()))
+
+    parts = (message.text or "").split()
+    hours = 24
+    if len(parts) > 1:
+        try:
+            hours = max(1, min(720, int(parts[1])))
+        except ValueError:
+            hours = 24
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    await message.answer(texts.peer_admin_stats(await db.peer_stats(since), hours))
 
 
 def _parse_caption(caption: str) -> tuple[str, int] | None:
@@ -514,7 +569,7 @@ def _parse_caption(caption: str) -> tuple[str, int] | None:
 
 
 async def _peer_save_from_message(
-    message: Message, db: Database, user: User
+    message: Message, db: Database, user: User, config: Config
 ) -> bool:
     """Создаёт анкету из фото с подписью. True, если получилось."""
     parsed = _parse_caption(message.caption or "")
@@ -541,7 +596,9 @@ async def _peer_save_from_message(
         user.id, name, age, data, photo.file_unique_id, peer.TERMS_VERSION
     )
     await _remember(message, db)
-    await message.answer(texts.PEER_SAVED)
+    await message.answer(
+        texts.PEER_SAVED, reply_markup=keyboards.peer_after_save(config.webapp_url)
+    )
     return True
 
 
@@ -573,7 +630,9 @@ async def _notify_rated(bot, db: Database, config: Config, owner_id: int) -> Non
         )
 
 
-async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
+async def _send_next_card(
+    message: Message, db: Database, user_id: int, config_url: str = ""
+) -> None:
     """Показывает следующую анкету из очереди."""
     profile = await db.peer_profile(user_id)
     if not profile or profile.get("status") != "active":
@@ -585,7 +644,10 @@ async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
         datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
     )
     if used >= peer.DAILY_VOTE_LIMIT:
-        await message.answer("Лимит оценок на сегодня исчерпан.")
+        await message.answer(
+            "Лимит оценок на сегодня исчерпан. Возвращайся завтра.",
+            reply_markup=keyboards.peer_empty(config_url),
+        )
         return
 
     rows = await db.peer_next(user_id, limit=1)
@@ -603,7 +665,9 @@ async def _send_next_card(message: Message, db: Database, user_id: int) -> None:
     # Живых анкет не нашлось — берём снимок из папки наполнения
     seed = await _next_seed(db, user_id)
     if seed is None:
-        await message.answer(texts.PEER_EMPTY)
+        await message.answer(
+            texts.PEER_EMPTY, reply_markup=keyboards.peer_empty(config_url)
+        )
         return
 
     target, photo, name, age = seed
@@ -650,9 +714,9 @@ async def _next_seed(db: Database, user_id: int):
 @router.message(Command("rate"))
 async def cmd_rate(message: Message, db: Database, config: Config) -> None:
     user = message.from_user
-    if user is None or not _peer_open(config, user.id):
+    if user is None or not await _peer_live(db, config, user.id):
         return
-    await _send_next_card(message, db, user.id)
+    await _send_next_card(message, db, user.id, config.webapp_url)
 
 
 @router.callback_query(F.data == "pwho")
@@ -722,7 +786,7 @@ async def cb_peer_rate(callback: CallbackQuery, db: Database, config: Config) ->
     user = callback.from_user
     if callback.message is None or not _peer_open(config, user.id):
         return
-    await _send_next_card(callback.message, db, user.id)
+    await _send_next_card(callback.message, db, user.id, config.webapp_url)
 
 
 @router.callback_query(F.data == "pnext")
@@ -733,7 +797,7 @@ async def cb_peer_next(callback: CallbackQuery, db: Database, config: Config) ->
         return
     with contextlib.suppress(TelegramAPIError):
         await callback.message.delete()
-    await _send_next_card(callback.message, db, user.id)
+    await _send_next_card(callback.message, db, user.id, config.webapp_url)
 
 
 @router.callback_query(F.data.startswith("pv:"))
@@ -772,7 +836,7 @@ async def cb_peer_vote(callback: CallbackQuery, db: Database, config: Config) ->
     )
     with contextlib.suppress(TelegramAPIError):
         await callback.message.delete()
-    await _send_next_card(callback.message, db, user.id)
+    await _send_next_card(callback.message, db, user.id, config.webapp_url)
 
 
 @router.callback_query(F.data.startswith("pr:"))
@@ -806,7 +870,7 @@ async def cb_peer_reason(
     await callback.answer(texts.PEER_REPORT_SENT, show_alert=True)
     with contextlib.suppress(TelegramAPIError):
         await callback.message.delete()
-    await _send_next_card(callback.message, db, user.id)
+    await _send_next_card(callback.message, db, user.id, config.webapp_url)
 
 
 # ─────────────────────────── модерация жалоб ───────────────────────────────
@@ -943,7 +1007,7 @@ async def handle_photo(
 
     # Анкета режима оценок: фото с подписью «имя, возраст»
     if _peer_open(config, user.id) and (message.caption or "").strip():
-        if await _peer_save_from_message(message, db, user):
+        if await _peer_save_from_message(message, db, user, config):
             return
 
     if config.webapp_url:
@@ -1241,6 +1305,18 @@ async def cb_ref_enter(callback: CallbackQuery, db: Database) -> None:
     await callback.message.answer(texts.REF_HOWTO, reply_markup=keyboards.back_menu())
 
 
+async def _show_peer_menu(message: Message, db: Database, config: Config, user_id: int) -> None:
+    """Экран режима. Одна точка, чтобы кнопки возврата вели в одно место."""
+    state = await _peer_state_for(db, user_id)
+    profile = state.get("profile")
+    ready = bool(profile and profile.get("status") == "active")
+
+    await message.answer(
+        texts.peer_intro(state),
+        reply_markup=keyboards.peer_menu(config.webapp_url, has_profile=ready),
+    )
+
+
 @router.callback_query(F.data == "peer")
 async def cb_peer(callback: CallbackQuery, db: Database, config: Config) -> None:
     await callback.answer()
@@ -1248,14 +1324,51 @@ async def cb_peer(callback: CallbackQuery, db: Database, config: Config) -> None
     if callback.message is None:
         return
 
-    if not _peer_open(config, user.id):
+    if not await _peer_live(db, config, user.id):
         await callback.message.answer(texts.PEER_CLOSED)
         return
 
+    await _show_peer_menu(callback.message, db, config, user.id)
+
+
+@router.callback_query(F.data == "pback")
+async def cb_peer_back(callback: CallbackQuery, db: Database, config: Config) -> None:
+    """Возврат из карточки в меню режима: карточку убираем, чтобы не копилась."""
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+    await _show_peer_menu(callback.message, db, config, user.id)
+
+
+@router.callback_query(F.data == "pdel")
+async def cb_peer_del_ask(callback: CallbackQuery, config: Config) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
     await callback.message.answer(
-        texts.peer_intro(await _peer_state_for(db, user.id)),
-        reply_markup=keyboards.peer_menu(config.webapp_url),
+        texts.PEER_DELETE_ASK, reply_markup=keyboards.peer_confirm_delete()
     )
+
+
+@router.callback_query(F.data == "pdelyes")
+async def cb_peer_del_yes(
+    callback: CallbackQuery, db: Database, config: Config
+) -> None:
+    await callback.answer()
+    user = callback.from_user
+    if callback.message is None or not _peer_open(config, user.id):
+        return
+
+    await db.peer_delete(user.id)
+    with contextlib.suppress(TelegramAPIError):
+        await callback.message.delete()
+    await callback.message.answer(texts.PEER_DELETED)
+    await _show_peer_menu(callback.message, db, config, user.id)
 
 
 @router.callback_query(F.data == "stats")

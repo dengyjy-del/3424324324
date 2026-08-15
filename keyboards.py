@@ -134,8 +134,17 @@ def peer_vote(target: str) -> InlineKeyboardMarkup:
 
     builder.row(
         InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
-        InlineKeyboardButton(text="⏭ Дальше", callback_data="pnext"),
+        InlineKeyboardButton(text="⏭ Пропустить", callback_data="pnext"),
     )
+    builder.row(InlineKeyboardButton(text="← Выйти", callback_data="pback"))
+    return builder.as_markup()
+
+
+def peer_empty(webapp_url: str = "") -> InlineKeyboardMarkup:
+    """Очередь кончилась — не оставляем человека без единой кнопки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🔄 Проверить снова", callback_data="prate"))
+    builder.row(InlineKeyboardButton(text="← В ChadMatch", callback_data="pback"))
     return builder.as_markup()
 
 
@@ -147,7 +156,10 @@ def peer_report_reasons(target: str) -> InlineKeyboardMarkup:
         builder.row(
             InlineKeyboardButton(text=title, callback_data=f"prr:{key}:{target}")
         )
-    builder.row(InlineKeyboardButton(text="← Отмена", callback_data="pnext"))
+    builder.row(
+        InlineKeyboardButton(text="← Отмена", callback_data="pnext"),
+        InlineKeyboardButton(text="🏠 Выйти", callback_data="pback"),
+    )
     return builder.as_markup()
 
 
@@ -164,17 +176,52 @@ def peer_demo_card(username: str = "") -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def peer_menu(webapp_url: str = "") -> InlineKeyboardMarkup:
-    """Меню ChadMatch: приложение удобнее, но всё работает и в чате."""
+def peer_menu(webapp_url: str = "", has_profile: bool = False) -> InlineKeyboardMarkup:
+    """
+    Меню ChadMatch. Набор кнопок зависит от того, есть ли анкета: без неё
+    оценивать нельзя, и предлагать это — тупик.
+    """
     builder = InlineKeyboardBuilder()
+
     if webapp_url:
         builder.row(
             InlineKeyboardButton(
                 text="🔥 Открыть ChadMatch", web_app=WebAppInfo(url=webapp_url)
             )
         )
-    builder.row(InlineKeyboardButton(text="⭐ Оценивать здесь", callback_data="prate"))
-    builder.row(InlineKeyboardButton(text="← Назад", callback_data="back"))
+
+    if has_profile:
+        builder.row(
+            InlineKeyboardButton(text="⭐ Оценивать", callback_data="prate"),
+            InlineKeyboardButton(text="👀 Кто оценил", callback_data="pwho"),
+        )
+        builder.row(
+            InlineKeyboardButton(text="🗑 Удалить анкету", callback_data="pdel")
+        )
+
+    builder.row(InlineKeyboardButton(text="🏠 В меню", callback_data="menu"))
+    return builder.as_markup()
+
+
+def peer_after_save(webapp_url: str = "") -> InlineKeyboardMarkup:
+    """Анкета создана — сразу предлагаем следующий шаг."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⭐ Начать оценивать", callback_data="prate"))
+    if webapp_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔥 Открыть ChadMatch", web_app=WebAppInfo(url=webapp_url)
+            )
+        )
+    return builder.as_markup()
+
+
+def peer_confirm_delete() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🗑 Да, удалить", callback_data="pdelyes"),
+        InlineKeyboardButton(text="← Отмена", callback_data="pback"),
+    )
     return builder.as_markup()
 
 
@@ -216,4 +263,18 @@ def peer_answer(target: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🚩 Пожаловаться", callback_data=f"pr:{target}"),
         InlineKeyboardButton(text="✖️ Закрыть", callback_data="pclose"),
     )
+    return builder.as_markup()
+
+
+def legal_links(terms_url: str = "", privacy_url: str = "") -> InlineKeyboardMarkup:
+    """Ссылки на документы. Кнопки появляются только у заданных адресов."""
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    if terms_url:
+        row.append(InlineKeyboardButton(text="📄 Условия", url=terms_url))
+    if privacy_url:
+        row.append(InlineKeyboardButton(text="🔒 Приватность", url=privacy_url))
+    if row:
+        builder.row(*row)
+    builder.row(InlineKeyboardButton(text="🏠 В меню", callback_data="menu"))
     return builder.as_markup()

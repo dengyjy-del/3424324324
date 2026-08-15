@@ -257,8 +257,12 @@ class BaseDatabase(ABC):
     async def peer_seed_clear(self) -> int: ...
 
     @abstractmethod
-    async def peer_stats(self) -> dict: ...
-
+    async def peer_stats(self, since: datetime | None = None) -> dict:
+        """
+        Сводка по режиму. Живые анкеты считаются отдельно от наполнения:
+        смешивать их в одном числе — верный способ обмануть себя насчёт
+        того, сколько людей реально пользуется режимом.
+        """
     async def diagnose_labels(self) -> dict:
         """Прямая проверка таблицы разметки: что реально лежит в базе."""
 
@@ -1055,32 +1059,67 @@ class SQLiteDatabase(BaseDatabase):
         await self.conn.commit()
         return cursor.rowcount
 
-    async def peer_stats(self) -> dict:
+    async def peer_stats(self, since: datetime | None = None) -> dict:
+        moment = (since or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+
         async with self.conn.execute(
             """
             SELECT COUNT(*) AS total,
                    SUM(status = 'active') AS active,
                    SUM(status = 'hidden') AS hidden,
-                   SUM(status = 'banned') AS banned
+                   SUM(status = 'banned') AS banned,
+                   SUM(status = 'active' AND photo IS NOT NULL) AS with_photo,
+                   SUM(created_at >= ?) AS fresh
               FROM peer_profiles
-            """
+            """,
+            (moment,),
         ) as cursor:
             row = await cursor.fetchone()
+
         async with self.conn.execute("SELECT COUNT(*) AS n FROM peer_votes") as cursor:
             votes = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute(
+            "SELECT COUNT(*) AS n FROM peer_votes WHERE created_at >= ?", (moment,)
+        ) as cursor:
+            votes_recent = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute(
+            "SELECT COUNT(DISTINCT voter_id) AS n FROM peer_votes WHERE created_at >= ?",
+            (moment,),
+        ) as cursor:
+            voters_recent = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute(
+            """
+            SELECT COUNT(DISTINCT target) AS n FROM peer_votes
+             WHERE target LIKE 'u:%'
+            """
+        ) as cursor:
+            rated_profiles = int((await cursor.fetchone())["n"])
+
         async with self.conn.execute(
             "SELECT COUNT(*) AS n FROM peer_reports WHERE status = 'open'"
         ) as cursor:
             reports = int((await cursor.fetchone())["n"])
+
+        async with self.conn.execute("SELECT COUNT(*) AS n FROM peer_seed") as cursor:
+            seed = int((await cursor.fetchone())["n"])
+
         return {
             "profiles": int(row["total"] or 0),
             "active": int(row["active"] or 0),
             "hidden": int(row["hidden"] or 0),
             "banned": int(row["banned"] or 0),
+            "with_photo": int(row["with_photo"] or 0),
+            "fresh": int(row["fresh"] or 0),
+            "rated_profiles": rated_profiles,
             "votes": votes,
+            "votes_recent": votes_recent,
+            "voters_recent": voters_recent,
             "open_reports": reports,
+            "seed": seed,
         }
-
     async def diagnose_labels(self) -> dict:
         info = {"backend": "sqlite", "target": self._path}
         try:
@@ -1985,30 +2024,54 @@ class PostgresDatabase(BaseDatabase):
             result = await conn.execute("DELETE FROM peer_seed")
         return int(result.split()[-1]) if result else 0
 
-    async def peer_stats(self) -> dict:
+    async def peer_stats(self, since: datetime | None = None) -> dict:
+        moment = since or datetime.now(timezone.utc)
+
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE status = 'active') AS active,
                        COUNT(*) FILTER (WHERE status = 'hidden') AS hidden,
-                       COUNT(*) FILTER (WHERE status = 'banned') AS banned
+                       COUNT(*) FILTER (WHERE status = 'banned') AS banned,
+                       COUNT(*) FILTER (
+                           WHERE status = 'active' AND photo IS NOT NULL
+                       ) AS with_photo,
+                       COUNT(*) FILTER (WHERE created_at >= $1) AS fresh
                   FROM peer_profiles
-                """
+                """,
+                moment,
             )
             votes = await conn.fetchval("SELECT COUNT(*) FROM peer_votes")
+            votes_recent = await conn.fetchval(
+                "SELECT COUNT(*) FROM peer_votes WHERE created_at >= $1", moment
+            )
+            voters_recent = await conn.fetchval(
+                "SELECT COUNT(DISTINCT voter_id) FROM peer_votes WHERE created_at >= $1",
+                moment,
+            )
+            rated_profiles = await conn.fetchval(
+                "SELECT COUNT(DISTINCT target) FROM peer_votes WHERE target LIKE 'u:%'"
+            )
             reports = await conn.fetchval(
                 "SELECT COUNT(*) FROM peer_reports WHERE status = 'open'"
             )
+            seed = await conn.fetchval("SELECT COUNT(*) FROM peer_seed")
+
         return {
             "profiles": int(row["total"] or 0),
             "active": int(row["active"] or 0),
             "hidden": int(row["hidden"] or 0),
             "banned": int(row["banned"] or 0),
+            "with_photo": int(row["with_photo"] or 0),
+            "fresh": int(row["fresh"] or 0),
+            "rated_profiles": int(rated_profiles or 0),
             "votes": int(votes or 0),
+            "votes_recent": int(votes_recent or 0),
+            "voters_recent": int(voters_recent or 0),
             "open_reports": int(reports or 0),
+            "seed": int(seed or 0),
         }
-
     async def diagnose_labels(self) -> dict:
         # Хост показываем без логина и пароля — по нему видно, та ли база
         host = self._dsn.split("@")[-1].split("/")[0] if "@" in self._dsn else "?"

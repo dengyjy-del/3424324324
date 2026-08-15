@@ -704,13 +704,16 @@ PEER_SAVED = (
 )
 
 PEER_NO_PROFILE = (
-    "Сначала своя анкета: отправь фото с подписью <code>Имя, возраст</code>.\n"
-    "<i>Так честнее — оценивают те, кого можно оценить в ответ.</i>"
+    "📸 <b>Сначала своя анкета</b>\n"
+    "Отправь фото и в подписи к нему укажи имя и возраст:\n"
+    "<code>Макс, 19</code>\n"
+    "<i>Так честнее: оценивают те, кого можно оценить в ответ.</i>"
 )
 
 PEER_EMPTY = (
-    "На сегодня анкеты закончились.\n"
-    "<i>Загляни позже — новые появляются постоянно.</i>"
+    "🏁 <b>Анкеты закончились</b>\n"
+    "Ты оценил всех, кто сейчас есть.\n"
+    "<i>Новые появляются постоянно — загляни позже.</i>"
 )
 
 PEER_DELETED = "🗑 Анкета и фото удалены."
@@ -748,16 +751,59 @@ PEER_BANNED_NOTICE = (
 )
 
 
-def peer_admin_stats(data: dict) -> str:
-    return (
-        "👥 <b>РЕЖИМ ОЦЕНОК</b>\n"
-        f"{LINE}\n"
-        f"Анкет всего: <b>{data['profiles']}</b>\n"
-        f"Активных: <b>{data['active']}</b>\n"
-        f"Скрыто: <b>{data['hidden']}</b> · заблокировано: <b>{data['banned']}</b>\n"
-        f"Оценок выставлено: <b>{data['votes']}</b>\n"
-        f"Открытых жалоб: <b>{data['open_reports']}</b>"
-    )
+def peer_admin_stats(data: dict, hours: int = 24) -> str:
+    """
+    Сводка по ChadMatch.
+
+    Живые анкеты и наполнение разведены намеренно: одно число на всё
+    создаёт ложное ощущение, что режимом пользуются.
+    """
+    live = data["with_photo"]
+    rated = data["rated_profiles"]
+    silent = max(0, live - rated)
+
+    lines = [
+        "🔥 <b>CHADMATCH</b>",
+        LINE,
+        "<b>ЖИВЫЕ АНКЕТЫ</b>",
+        f"Готовы к показу: <b>{live}</b>",
+        f"Всего создано: <b>{data['profiles']}</b>",
+    ]
+
+    if data["fresh"]:
+        lines.append(f"Новых за {hours} ч: <b>{data['fresh']}</b>")
+
+    if data["hidden"] or data["banned"]:
+        lines.append(
+            f"Скрыто: <b>{data['hidden']}</b> · "
+            f"заблокировано: <b>{data['banned']}</b>"
+        )
+
+    lines += [
+        LINE,
+        "<b>АКТИВНОСТЬ</b>",
+        f"Оценок всего: <b>{data['votes']}</b>",
+        f"За {hours} ч: <b>{data['votes_recent']}</b> "
+        f"от <b>{data['voters_recent']}</b> чел.",
+        f"Получили хоть одну оценку: <b>{rated}</b> из {live}",
+    ]
+
+    if silent:
+        lines.append(f"<i>Ждут первой оценки: {silent}</i>")
+
+    lines += [
+        LINE,
+        f"Снимков наполнения: <b>{data['seed']}</b>",
+        f"Открытых жалоб: <b>{data['open_reports']}</b>",
+    ]
+
+    if not live:
+        lines += [
+            LINE,
+            "<i>Живых анкет нет — в очереди показывается только наполнение.</i>",
+        ]
+
+    return "\n".join(lines)
 
 
 GIVE_USAGE = (
@@ -847,9 +893,9 @@ def seed_status(pool: int, folder: dict) -> str:
 
 
 PEER_CLOSED = (
-    "🔥 <b>ChadMatch скоро откроется</b>\n"
-    "Режим взаимных оценок пока в закрытом тестировании.\n"
-    "<i>Следи за каналом — сообщим о запуске.</i>"
+    "🔥 <b>ChadMatch временно недоступен</b>\n"
+    "Режим взаимных оценок сейчас закрыт.\n"
+    "<i>Следи за каналом — сообщим, когда откроем обратно.</i>"
 )
 
 
@@ -879,3 +925,56 @@ def peer_voter_card(name: str, age: int, tier_title: str) -> str:
 PEER_VOTER_CARD = "Этот человек недавно тебя оценил. Ответишь?"
 
 PEER_PROFILE_UPDATED = "✅ Анкета обновлена."
+
+
+PEER_DELETE_ASK = (
+    "🗑 <b>Удалить анкету?</b>\n"
+    "Фото будет стёрто, полученные оценки исчезнут.\n"
+    "<i>Создать заново можно в любой момент — фото с подписью «имя, возраст».</i>"
+)
+
+
+def legal(terms_url: str, privacy_url: str, brand: str) -> str:
+    lines = [
+        "📄 <b>ДОКУМЕНТЫ</b>",
+        LINE,
+        f"<b>Условия использования</b> — правила {safe(brand)}, что можно "
+        "и чего нельзя, как работает модерация.",
+        "",
+        "<b>Политика конфиденциальности</b> — какие данные обрабатываются, "
+        "где хранятся и как их удалить.",
+        LINE,
+    ]
+
+    if terms_url or privacy_url:
+        lines.append("<i>Открываются по кнопкам ниже.</i>")
+    else:
+        lines.append(
+            "<i>Ссылки пока не настроены: владельцу нужно задать "
+            "TERMS_URL и PRIVACY_URL.</i>"
+        )
+
+    return "\n".join(lines)
+
+
+PEER_SWITCH_OFF = (
+    "🔒 <b>ChadMatch закрыт</b>\n"
+    "Раздел скрыт у всех, кроме тебя и ID из PEER_IDS.\n"
+    "<i>Анкеты и оценки сохранены. Открыть: /peer_open on</i>"
+)
+
+PEER_SWITCH_ON = (
+    "🔓 <b>ChadMatch открыт всем</b>\n"
+    "<i>Закрыть мгновенно: /peer_open off</i>"
+)
+
+
+def peer_switch_status(open_now: bool) -> str:
+    state = "открыт всем" if open_now else "закрыт"
+    return (
+        f"🔥 <b>ChadMatch: {state}</b>\n"
+        f"{LINE}\n"
+        "<code>/peer_open on</code> — открыть\n"
+        "<code>/peer_open off</code> — закрыть немедленно\n"
+        "<i>Выключатель работает без передеплоя.</i>"
+    )
