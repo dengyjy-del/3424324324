@@ -20,7 +20,6 @@ const state = {
   lastScan: null,
   theme: "classic",
   legal: {},
-  userId: 0,
   cardTheme: 0,
   refCode: "",
 };
@@ -1214,7 +1213,7 @@ function initThemes() {
 
 /* ══════════════════ ВЗАИМНЫЕ ОЦЕНКИ ══════════════════ */
 
-const peerState = { deck: [], current: null, cfg: null, photo: null };
+const peerState = { deck: [], current: null, cfg: null, photo: null, profile: null };
 
 /**
  * Фото анкет отдаются по подписи Telegram, а тег <img> не умеет слать
@@ -1262,118 +1261,98 @@ async function shrinkPhoto(file) {
 }
 
 function peerShow(id) {
-  ["pr-consent", "pr-form", "pr-mine", "pr-deck", "pr-empty"].forEach((key) =>
-    $(key).classList.toggle("hidden", key !== id && !(id === "deck+mine" && key === "pr-mine"))
+  // Показываем ровно один блок: на экране всегда одно понятное действие
+  ["pr-consent", "pr-form", "pr-deck", "pr-empty"].forEach((key) =>
+    $(key).classList.toggle("hidden", key !== id)
   );
+  if (id !== "pr-deck") $("pr-me").classList.toggle("hidden", id !== "pr-form");
 }
 
 async function loadPeer() {
-  let state;
+  let state_;
   try {
-    state = await api("/api/peer/state");
+    state_ = await api("/api/peer/state");
   } catch (error) {
     toast(error.message);
     return;
   }
 
-  peerState.cfg = state;
+  peerState.cfg = state_;
   loadSeedBox();
-  $("pr-consent-text").textContent = state.consent_text;
-  paintLegal("pr-legal", state.legal || {}, "Перед началом прочитай");
+
+  $("pr-consent-text").textContent = state_.consent_text;
   $("pr-agree-label").textContent =
-    `Мне есть ${state.min_age}, на фото я, и я согласен с правилами`;
+    `Мне есть ${state_.min_age}, на фото я, и я согласен с правилами`;
+  paintLegal("pr-legal", state.legal || {}, "Перед началом прочитай");
 
-  const profile = state.profile;
+  const profile = state_.profile;
 
+  // Анкеты нет — единственное, что можно сделать, это её создать
   if (!profile) {
     peerShow("pr-consent");
     return;
   }
 
-  if (profile.status === "hidden") {
-    peerShow("pr-mine");
-    const until = (profile.hidden_until || "").slice(0, 16).replace("T", " ");
-    $("pr-mine").innerHTML =
-      `<h3>🙈 Анкета скрыта</h3>` +
-      `<p class="tiny" style="margin-top:6px">${profile.hidden_note || ""}</p>` +
-      `<p class="tiny" style="margin-top:4px">До ${until}</p>` +
-      `<p class="tiny" style="margin-top:10px;color:var(--ink-3)">` +
-      `Чтобы вернуться, загрузи новое фото.</p>` +
-      `<button class="btn btn-glass" id="pr-again" style="margin-top:12px">` +
-      `Загрузить новое фото</button>`;
-    $("pr-again").addEventListener("click", () => {
+  if (profile.status === "hidden" || profile.status === "banned") {
+    peerShow("pr-form");
+    const hidden = profile.status === "hidden";
+    $("pr-form-title").textContent = hidden ? "Анкета скрыта" : "Анкета заблокирована";
+    $("pr-form-note").textContent = hidden
+      ? `${profile.hidden_note || "Решение модератора."} Чтобы вернуться, загрузи новое фото.`
+      : "Нарушение правил режима. Восстановить нельзя.";
+    $("pr-save").classList.toggle("hidden", !hidden);
+    if (hidden) {
       $("pr-name").value = profile.name;
       $("pr-age").value = profile.age;
-      peerShow("pr-form");
-    });
+    }
     return;
   }
 
-  if (profile.status === "banned") {
-    peerShow("pr-mine");
-    $("pr-mine").innerHTML =
-      `<h3>🚫 Анкета заблокирована</h3>` +
-      `<p class="tiny" style="margin-top:6px">Нарушение правил режима.</p>`;
-    return;
-  }
+  // Анкета активна: строка сверху, всё остальное место — колоде
+  peerState.profile = profile;
+  $("pr-me").classList.remove("hidden");
+  $("pr-me-name").textContent = `${profile.name}, ${profile.age}`;
+  $("pr-me-sub").textContent = profile.tier
+    ? `${profile.votes} оценок · ${profile.tier}`
+    : `${profile.votes} из 3 оценок до результата`;
+  $("pr-me-score").textContent = profile.tier ? profile.average : "—";
+  setPhoto($("pr-me-img"), `/api/peer/photo/me?v=${Date.now()}`);
 
-  // Анкета активна: показываем итог, управление и очередь
-  $("pr-mine").classList.remove("hidden");
-  $("pr-mine").className = "glass pad";
-  // Сама анкета свёрнута: развёрнутое фото на весь экран отодвигает
-  // очередь вниз, а пришли сюда оценивать, а не смотреть на себя.
-  $("pr-mine").innerHTML =
-    `<button class="pr-status pr-toggle" id="pr-open">` +
-    `<div style="min-width:0;text-align:left"><h3>${profile.name}, ${profile.age}</h3>` +
-    `<p class="tiny" style="margin-top:3px">` +
-    (profile.tier
-      ? `${profile.votes} оценок · ${profile.tier}`
-      : `${profile.votes} из 3 оценок до результата`) +
-    `</p></div>` +
-    `<span class="pr-status-value">${profile.tier ? profile.average : "—"}</span>` +
-    `<svg class="pr-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
-    `stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>` +
-    `</button>` +
-    `<div class="pr-mine-body hidden" id="pr-mine-body">` +
-    `<div class="pr-mine-photo"><img id="pr-mine-img" alt=""></div>` +
-    `<div class="pr-mine-actions">` +
-    `<button class="btn btn-glass" id="pr-edit">Изменить</button>` +
-    `<button class="btn btn-glass danger" id="pr-drop">Удалить</button>` +
-    `</div></div>`;
-
-  $("pr-open").addEventListener("click", () => {
-    haptic();
-    const body = $("pr-mine-body");
-    const opening = body.classList.contains("hidden");
-    body.classList.toggle("hidden", !opening);
-    $("pr-open").classList.toggle("open", opening);
-    // Фото качаем только когда его действительно открыли
-    if (opening) setPhoto($("pr-mine-img"), `/api/peer/photo/me?v=${Date.now()}`);
-  });
-
-  $("pr-edit").addEventListener("click", () => {
-    haptic();
-    $("pr-name").value = profile.name;
-    $("pr-age").value = profile.age;
-    $("pr-form-note").textContent =
-      "Без нового фото останется прежнее. Имя и возраст сохранятся сразу.";
-    peerShow("pr-form");
-  });
-
-  $("pr-drop").addEventListener("click", () => confirmDrop());
-
-  // Кто-то оценил, пока тебя не было
-  if (profile.new_votes > 0) {
-    showRatedBanner(profile.new_votes);
-  }
+  if (profile.new_votes > 0) showRatedBanner(profile.new_votes);
 
   await loadDeck();
 }
 
+/** Шторка своей анкеты: смотреть, менять, удалять — всё здесь. */
+function openMeSheet() {
+  const profile = peerState.profile;
+  if (!profile) return;
+  haptic();
+
+  $("me-sub").textContent = profile.tier
+    ? `Так тебя видят другие · ${profile.tier}`
+    : "Так тебя видят другие";
+
+  $("me-stats").innerHTML =
+    `<div class="me-stat"><b>${profile.votes}</b><span>оценок</span></div>` +
+    `<div class="me-stat"><b>${profile.tier ? profile.average : "—"}</b>` +
+    `<span>средняя</span></div>` +
+    `<div class="me-stat"><b>${peerState.cfg?.rated || 0}</b><span>оценил</span></div>`;
+
+  setPhoto($("me-photo-img"), `/api/peer/photo/me?v=${Date.now()}`);
+  $("me-veil").classList.add("open");
+  $("me-sheet").classList.add("open");
+}
+
+function closeMeSheet() {
+  $("me-veil").classList.remove("open");
+  $("me-sheet").classList.remove("open");
+}
+
 /** Подтверждение через нативный диалог Telegram, если он доступен. */
 function askConfirm(title, text) {
-  const message = `${title}\n\n${text}`;
-  if (tg?.showConfirm) {
+  const message = title + "\n\n" + text;
+  if (tg && tg.showConfirm) {
     return new Promise((done) => tg.showConfirm(message, (ok) => done(Boolean(ok))));
   }
   return Promise.resolve(window.confirm(message));
@@ -1385,24 +1364,22 @@ function showRatedBanner(count) {
   const box = $("pr-rated");
   box.classList.remove("hidden");
   box.innerHTML =
-    `<span class="rated-dot"></span>` +
-    `<div style="min-width:0"><h3>Новых ${word}: ${count}</h3>` +
-    `<p class="tiny" style="margin-top:3px">Кто-то оценил твою анкету, ` +
-    `пока тебя не было</p></div>` +
-    `<button class="shop-price" id="pr-rated-ok">Ок</button>`;
+    '<span class="rated-dot"></span>' +
+    '<div style="min-width:0"><h3>Новых ' + word + ": " + count + "</h3>" +
+    '<p class="tiny" style="margin-top:3px">Кто-то оценил твою анкету, ' +
+    "пока тебя не было</p></div>" +
+    '<button class="shop-price" id="pr-rated-ok">Ок</button>';
 
   $("pr-rated-ok").addEventListener("click", async () => {
     haptic();
     box.classList.add("hidden");
-    // Отмечаем просмотр, чтобы баннер не всплывал снова
     try {
       await api("/api/peer/seen", { method: "POST" });
     } catch (_) {}
-    loadPeer();
   });
 }
 
-/* Подтверждение удаления: анкета и фото уходят безвозвратно */
+/** Удаление анкеты: фото и оценки уходят безвозвратно. */
 async function confirmDrop() {
   haptic("medium");
   const ok = await askConfirm(
@@ -1416,9 +1393,13 @@ async function confirmDrop() {
     notifySuccess();
     toast("Анкета удалена");
     peerState.photo = null;
+    peerState.profile = null;
     $("pr-photo").classList.remove("filled");
     $("pr-name").value = "";
     $("pr-age").value = "";
+    $("pr-me").classList.add("hidden");
+    $("pr-agree").checked = false;
+    $("pr-accept").disabled = true;
     await loadPeer();
   } catch (error) {
     toast(error.message);
@@ -1440,6 +1421,7 @@ async function loadDeck() {
 function showNextCard() {
   $("pr-form").classList.add("hidden");
   $("pr-consent").classList.add("hidden");
+  $("pr-me").classList.remove("hidden");
 
   const card = peerState.deck.shift();
   peerState.current = card || null;
@@ -1578,6 +1560,41 @@ async function deleteSeed(row) {
 }
 
 function initPeer() {
+  $("pr-me").addEventListener("click", openMeSheet);
+  $("me-veil").addEventListener("click", closeMeSheet);
+
+  $("me-edit").addEventListener("click", () => {
+    haptic();
+    closeMeSheet();
+    const profile = peerState.profile;
+    $("pr-name").value = profile?.name || "";
+    $("pr-age").value = profile?.age || "";
+    $("pr-form-title").textContent = "Изменить анкету";
+    $("pr-form-note").textContent =
+      "Без нового фото останется прежнее. Полученные оценки сохранятся.";
+    $("pr-cancel").classList.remove("hidden");
+    $("pr-save").classList.remove("hidden");
+    peerShow("pr-form");
+  });
+
+  $("me-drop").addEventListener("click", () => {
+    closeMeSheet();
+    confirmDrop();
+  });
+
+  $("pr-cancel").addEventListener("click", () => {
+    haptic();
+    peerState.photo = null;
+    $("pr-photo").classList.remove("filled");
+    $("pr-cancel").classList.add("hidden");
+    loadPeer();
+  });
+
+  $("pr-refresh").addEventListener("click", () => {
+    haptic();
+    loadDeck();
+  });
+
   $("pr-seed-toggle").addEventListener("click", () => {
     haptic();
     const box = $("pr-seed-list");
@@ -1620,6 +1637,10 @@ function initPeer() {
 
   $("pr-accept").addEventListener("click", () => {
     haptic();
+    $("pr-form-title").textContent = "Твоя анкета";
+    $("pr-form-note").textContent =
+      "Фото, имя и возраст увидят другие. Удалить можно в любой момент.";
+    $("pr-cancel").classList.add("hidden");
     peerShow("pr-form");
   });
 
@@ -1655,6 +1676,9 @@ function initPeer() {
       notifySuccess();
       peerState.photo = null;
       $("pr-photo").classList.remove("filled");
+      $("pr-cancel").classList.add("hidden");
+      $("pr-form-title").textContent = "Твоя анкета";
+      $("pr-form-note").textContent = "";
       await loadPeer();
     } catch (error) {
       toast(error.message);

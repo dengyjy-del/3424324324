@@ -534,10 +534,20 @@
 
   <!-- ══════════════ ВЗАИМНЫЕ ОЦЕНКИ ══════════════ -->
   <section class="screen" id="s-peer">
-    <header style="margin-bottom:16px">
-      <p class="eyebrow">Оценки от живых людей</p>
-      <h1 style="margin-top:6px">ChadMatch</h1>
-    </header>
+    <!-- Своя анкета — компактной строкой сверху, как аккаунт в настройках
+         Apple. Она не должна конкурировать с колодой: пришли оценивать. -->
+    <button class="me-bar hidden" id="pr-me">
+      <span class="me-avatar"><img id="pr-me-img" alt=""></span>
+      <span class="me-text">
+        <b id="pr-me-name">—</b>
+        <span class="tiny" id="pr-me-sub"></span>
+      </span>
+      <span class="numeral me-score" id="pr-me-score">—</span>
+      <svg class="me-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+
+    <div class="glass pad rated-banner hidden" id="pr-rated"></div>
 
     <!-- согласие: показывается один раз перед созданием анкеты -->
     <div class="glass pad hidden" id="pr-consent">
@@ -556,44 +566,50 @@
 
     <!-- создание и редактирование анкеты -->
     <div class="glass pad hidden" id="pr-form">
-      <p class="eyebrow">Твоя анкета</p>
-      <input class="ref-input" id="pr-name" placeholder="ИМЯ" maxlength="24"
-             autocomplete="off" style="text-transform:none;letter-spacing:0.04em">
-      <input class="ref-input" id="pr-age" placeholder="ВОЗРАСТ" inputmode="numeric"
-             maxlength="2" style="margin-top:9px">
+      <p class="eyebrow" id="pr-form-title">Твоя анкета</p>
       <div class="pr-photo" id="pr-photo">
         <img id="pr-photo-img" alt="">
         <span id="pr-photo-hint">Нажми, чтобы выбрать фото</span>
       </div>
       <input type="file" id="pr-file" accept="image/*" class="hidden">
+      <input class="ref-input" id="pr-name" placeholder="ИМЯ" maxlength="24"
+             autocomplete="off" style="text-transform:none;letter-spacing:0.04em;margin-top:11px">
+      <input class="ref-input" id="pr-age" placeholder="ВОЗРАСТ" inputmode="numeric"
+             maxlength="2" style="margin-top:9px">
       <button class="btn btn-primary" id="pr-save" style="margin-top:12px">
         Сохранить анкету
       </button>
+      <button class="btn btn-glass hidden" id="pr-cancel" style="margin-top:8px">
+        Отмена
+      </button>
       <p class="tiny" style="margin-top:10px;color:var(--ink-3)" id="pr-form-note"></p>
     </div>
-
-    <!-- новые оценки, пока тебя не было -->
-    <div class="glass pad rated-banner hidden" id="pr-rated"></div>
-
-    <!-- статус анкеты -->
-    <div class="glass pad hidden" id="pr-mine"></div>
 
     <!-- очередь на оценку -->
     <div class="hidden" id="pr-deck">
       <div class="pr-card">
         <img id="pr-card-img" alt="">
+        <button class="pr-flag" id="pr-report" title="Пожаловаться">🚩</button>
         <div class="pr-card-veil">
           <span id="pr-card-name"></span>
         </div>
       </div>
       <div class="pr-tiers" id="pr-tiers"></div>
-      <div class="stack" style="margin-top:10px">
-        <button class="btn btn-glass" id="pr-report">🚩 Пожаловаться</button>
-      </div>
-      <p class="tiny" style="margin-top:10px;text-align:center" id="pr-left"></p>
+      <p class="tiny pr-left" id="pr-left"></p>
     </div>
 
-    <!-- пополнение пула: видно только владельцу -->
+    <div class="glass pad hidden center" id="pr-empty">
+      <div class="mark" style="margin:0 auto 12px">🏁</div>
+      <h2>Анкеты закончились</h2>
+      <p class="tiny" style="margin-top:8px">
+        Ты оценил всех, кто сейчас есть. Новые появляются постоянно.
+      </p>
+      <button class="btn btn-glass" id="pr-refresh" style="margin-top:14px">
+        Проверить снова
+      </button>
+    </div>
+
+    <!-- наполнение: видно только владельцу -->
     <div class="glass pad hidden" id="pr-seed">
       <p class="eyebrow">Наполнение</p>
       <p class="tiny" style="margin-top:6px" id="pr-seed-note"></p>
@@ -605,13 +621,6 @@
         Управлять анкетами
       </button>
       <div class="seed-list hidden" id="pr-seed-list"></div>
-    </div>
-
-    <div class="glass pad hidden" id="pr-empty">
-      <h3>Анкеты закончились</h3>
-      <p class="tiny" style="margin-top:6px">
-        Загляни позже — новые появляются постоянно.
-      </p>
     </div>
   </section>
 
@@ -669,6 +678,21 @@
   <div class="sheet-actions">
     <button class="btn btn-primary" id="share-send">Отправить</button>
     <button class="btn btn-glass" id="share-save">Сохранить в галерею</button>
+  </div>
+</div>
+
+<div class="sheet-veil" id="me-veil"></div>
+<div class="sheet" id="me-sheet">
+  <div class="sheet-grip"></div>
+  <div class="sheet-head">
+    <h2>Твоя анкета</h2>
+    <p class="tiny" id="me-sub">Так тебя видят другие</p>
+  </div>
+  <div class="me-photo"><img id="me-photo-img" alt=""></div>
+  <div class="me-stats" id="me-stats"></div>
+  <div class="sheet-actions">
+    <button class="btn btn-primary" id="me-edit">Изменить анкету</button>
+    <button class="btn btn-glass danger" id="me-drop">Удалить анкету</button>
   </div>
 </div>
 
