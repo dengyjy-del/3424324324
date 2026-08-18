@@ -266,6 +266,19 @@ class BaseDatabase(ABC):
     async def peer_seed_clear(self) -> int: ...
 
     @abstractmethod
+    async def peer_vote_rows(self, limit: int = 50000) -> list[dict]:
+        """
+        Сырые оценки для сводки: кто, кого и как оценил.
+
+        Считаем в Python, а не в SQL: у SQLite нет STDDEV, и одинаковая
+        логика на обоих бэкендах здесь дороже пары миллисекунд.
+        """
+
+    @abstractmethod
+    async def algo_scores(self) -> dict[int, float]:
+        """Последний балл алгоритма — чтобы сравнить его с мнением людей."""
+
+    @abstractmethod
     async def peer_stats(self, since: datetime | None = None) -> dict:
         """
         Сводка по режиму. Живые анкеты считаются отдельно от наполнения:
@@ -1117,6 +1130,25 @@ class SQLiteDatabase(BaseDatabase):
         cursor = await self.conn.execute("DELETE FROM peer_seed")
         await self.conn.commit()
         return cursor.rowcount
+
+    async def peer_vote_rows(self, limit: int = 50000) -> list[dict]:
+        async with self.conn.execute(
+            """
+              SELECT voter_id, target, tier, score FROM peer_votes
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (limit,),
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+    async def algo_scores(self) -> dict[int, float]:
+        async with self.conn.execute(
+            "SELECT user_id, last_overall FROM users WHERE ratings_count > 0"
+        ) as cursor:
+            return {
+                int(r["user_id"]): float(r["last_overall"])
+                for r in await cursor.fetchall()
+            }
 
     async def peer_stats(self, since: datetime | None = None) -> dict:
         moment = (since or datetime.now(timezone.utc)).isoformat(timespec="seconds")
@@ -2145,6 +2177,24 @@ class PostgresDatabase(BaseDatabase):
         async with self.pool.acquire() as conn:
             result = await conn.execute("DELETE FROM peer_seed")
         return int(result.split()[-1]) if result else 0
+
+    async def peer_vote_rows(self, limit: int = 50000) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                  SELECT voter_id, target, tier, score FROM peer_votes
+                ORDER BY created_at DESC LIMIT $1
+                """,
+                limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def algo_scores(self) -> dict[int, float]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, last_overall FROM users WHERE ratings_count > 0"
+            )
+        return {int(r["user_id"]): float(r["last_overall"]) for r in rows}
 
     async def peer_stats(self, since: datetime | None = None) -> dict:
         moment = since or datetime.now(timezone.utc)

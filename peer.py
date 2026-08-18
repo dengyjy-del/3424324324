@@ -179,3 +179,97 @@ def parse_identity(raw: str) -> tuple[str, int] | None:
                 if PEER_MIN_AGE <= age <= 99:
                     return name, age
     return None
+
+
+# ═══════════════════════ СВОДКА ПО ОЦЕНКАМ ═════════════════════════════════
+#
+# Считается по сырым оценкам, чтобы всё было в одном месте и читалось
+# целиком. Числа рассчитаны на публикацию: людям интересно видеть, где они
+# на общем фоне, и это само по себе повод вернуться в режим.
+
+
+def _stdev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+
+
+def vibe(votes: list[dict], algo: dict[int, float] | None = None) -> dict:
+    """Разбор всех выставленных оценок: распределение, согласие, крайности."""
+    if not votes:
+        return {"votes": 0}
+
+    spread: dict[str, int] = {tier.key: 0 for tier in PEER_TIERS}
+    by_target: dict[str, list[float]] = {}
+    by_voter: dict[int, list[float]] = {}
+
+    for row in votes:
+        if row["tier"] in spread:
+            spread[row["tier"]] += 1
+        by_target.setdefault(row["target"], []).append(float(row["score"]))
+        by_voter.setdefault(int(row["voter_id"]), []).append(float(row["score"]))
+
+    total = len(votes)
+    average = sum(float(r["score"]) for r in votes) / total
+
+    # Анкеты, по которым набралось хотя бы три мнения
+    judged = {t: v for t, v in by_target.items() if len(v) >= 3}
+    per_profile = [sum(v) / len(v) for v in judged.values()]
+
+    # Насколько люди сходятся во мнении об одном и том же человеке.
+    # Маленький разброс — согласие, большой — спорная внешность.
+    agreement = (
+        sum(_stdev(v) for v in judged.values()) / len(judged) if judged else 0.0
+    )
+
+    # Самый спорный: там, где мнения расходятся сильнее всего
+    controversial = max(
+        (( _stdev(v), t) for t, v in judged.items()), default=(0.0, None)
+    )
+
+    # Щедрость: у скольких оценивающих средняя выше общей
+    active = {u: v for u, v in by_voter.items() if len(v) >= 5}
+    generous = sum(1 for v in active.values() if sum(v) / len(v) > average)
+
+    result = {
+        "votes": total,
+        "voters": len(by_voter),
+        "targets": len(by_target),
+        "average": round(average, 2),
+        "spread": spread,
+        "judged": len(judged),
+        "agreement": round(agreement, 2),
+        "controversial_gap": round(controversial[0], 2),
+        "generous_share": round(generous / len(active) * 100) if active else 0,
+        "profile_scores": per_profile,
+    }
+
+    # Алгоритм против людей: сравниваем только тех, у кого есть и то и другое
+    if algo:
+        pairs = []
+        for target, scores in judged.items():
+            if not target.startswith("u:"):
+                continue
+            try:
+                user_id = int(target[2:])
+            except ValueError:
+                continue
+            if user_id in algo:
+                pairs.append((algo[user_id], sum(scores) / len(scores)))
+
+        if len(pairs) >= 3:
+            algo_avg = sum(a for a, _ in pairs) / len(pairs)
+            human_avg = sum(h for _, h in pairs) / len(pairs)
+            result["duel"] = {
+                "count": len(pairs),
+                "algo": round(algo_avg, 2),
+                "people": round(human_avg, 2),
+                "gap": round(human_avg - algo_avg, 2),
+                # У скольких люди оказались щедрее алгоритма
+                "people_kinder": round(
+                    sum(1 for a, h in pairs if h > a) / len(pairs) * 100
+                ),
+            }
+
+    return result

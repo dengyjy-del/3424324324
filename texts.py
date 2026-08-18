@@ -1054,3 +1054,85 @@ def send_one_failed(error: str) -> str:
         f"<code>{safe(error)}</code>\n"
         "<i>Частая причина: человек не запускал бота или заблокировал его.</i>"
     )
+
+
+def peer_vibe(data: dict, brand: str) -> str:
+    """
+    Сводка по оценкам ChadMatch — сразу в виде, пригодном для канала.
+
+    Формат выбран под копирование в пост: без служебных полей, с барами
+    и парой выводов, которые интересно прочитать со стороны.
+    """
+    from peer import PEER_TIERS
+
+    if not data.get("votes"):
+        return (
+            "📊 <b>Оценок пока нет</b>\n"
+            "<i>Статистика появится, когда люди начнут оценивать друг друга.</i>"
+        )
+
+    total = data["votes"]
+    spread = data["spread"]
+    peak = max(spread.values()) or 1
+
+    lines = [
+        f"📊 <b>КАК ОЦЕНИВАЮТ В {safe(brand.upper())}</b>",
+        LINE,
+        f"Всего оценок: <b>{total}</b>",
+        f"Средняя по всем: <b>{data['average']}</b>",
+        LINE,
+        "<b>КОМУ ЧТО СТАВЯТ</b>",
+    ]
+
+    for tier in PEER_TIERS:
+        count = spread.get(tier.key, 0)
+        share = count / total * 100
+        bar = "█" * max(1, round(share / 4)) if count else ""
+        lines.append(f"{tier.emoji} <code>{tier.title:<9}</code> {bar} {share:.0f}%")
+
+    top = max(PEER_TIERS, key=lambda t: spread.get(t.key, 0))
+    lines += [
+        LINE,
+        f"Чаще всего ставят <b>{top.title}</b> — "
+        f"{spread.get(top.key, 0) / total * 100:.0f}% всех оценок.",
+    ]
+
+    # Согласие: маленький разброс означает, что люди видят одинаково
+    if data.get("judged"):
+        mood = (
+            "люди на удивление единодушны"
+            if data["agreement"] < 1.2
+            else "мнения расходятся заметно"
+            if data["agreement"] < 2.0
+            else "мнения расходятся сильно"
+        )
+        lines.append(
+            f"Разброс мнений об одном человеке: <b>±{data['agreement']}</b> — "
+            f"{mood}."
+        )
+
+    if data.get("generous_share"):
+        lines.append(
+            f"Щедрых оценивающих: <b>{data['generous_share']}%</b> "
+            "<i>(ставят выше средней)</i>"
+        )
+
+    duel = data.get("duel")
+    if duel:
+        winner = "люди щедрее" if duel["gap"] > 0 else "алгоритм щедрее"
+        lines += [
+            LINE,
+            "<b>АЛГОРИТМ ПРОТИВ ЛЮДЕЙ</b>",
+            f"🧬 Разбор: <b>{duel['algo']}</b>",
+            f"🔥 Живые люди: <b>{duel['people']}</b>",
+            f"Разница <b>{abs(duel['gap'])}</b> — {winner}.",
+            f"<i>У {duel['people_kinder']}% людей оценка выше, чем у алгоритма. "
+            f"Сравнили {duel['count']} анкет.</i>",
+        ]
+
+    lines += [
+        LINE,
+        f"<i>По {data['voters']} оценивающим и {data['targets']} анкетам. "
+        "Средняя у анкеты появляется после трёх оценок.</i>",
+    ]
+    return "\n".join(lines)

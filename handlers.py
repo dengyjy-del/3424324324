@@ -698,6 +698,20 @@ async def cmd_seed(message: Message, db: Database, config: Config) -> None:
     )
 
 
+@router.message(Command("vibe"))
+async def cmd_vibe(message: Message, db: Database, config: Config) -> None:
+    """/vibe — как оценивают в ChadMatch. Сводка под публикацию в канал."""
+    user = message.from_user
+    if user is None or not config.admin_ids or not config.is_admin(user.id):
+        return
+
+    votes = await db.peer_vote_rows()
+    algo = await db.algo_scores()
+    await message.answer(
+        texts.peer_vibe(peer.vibe(votes, algo), config.brand_name)
+    )
+
+
 @router.message(Command("peer_stats"))
 async def cmd_peer_stats(message: Message, db: Database, config: Config) -> None:
     """/peer_stats [часов] — сводка по режиму. Только для владельца."""
