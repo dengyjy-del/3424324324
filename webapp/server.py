@@ -949,6 +949,25 @@ def create_app(
 
         return {"cards": cards, "votes_left": peer.DAILY_VOTE_LIMIT - used}
 
+    @app.get("/api/peer/photo/me")
+    async def peer_photo_own(user: TelegramUser = Depends(current_user)) -> Response:
+        """
+        Своё фото. Отдельным адресом, чтобы приложению не требовалось знать
+        собственный идентификатор: раньше он иногда не успевал попасть в
+        состояние, и запрос уходил на /photo/undefined.
+        """
+        await _peer_require_admin(user.id)
+
+        payload = await db.peer_photo(user.id)
+        if not payload:
+            raise HTTPException(status_code=404, detail="Нет фото")
+
+        return Response(
+            content=payload,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, no-store"},
+        )
+
     @app.get("/api/peer/photo/{target_id}")
     async def peer_photo(
         target_id: int, user: TelegramUser = Depends(current_user)

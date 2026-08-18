@@ -1320,24 +1320,36 @@ async function loadPeer() {
   // Анкета активна: показываем итог, управление и очередь
   $("pr-mine").classList.remove("hidden");
   $("pr-mine").className = "glass pad";
+  // Сама анкета свёрнута: развёрнутое фото на весь экран отодвигает
+  // очередь вниз, а пришли сюда оценивать, а не смотреть на себя.
   $("pr-mine").innerHTML =
-    `<div class="pr-mine-photo"><img id="pr-mine-img" alt=""></div>` +
-    `<div class="pr-status">` +
-    `<div style="min-width:0"><h3>${profile.name}, ${profile.age}</h3>` +
+    `<button class="pr-status pr-toggle" id="pr-open">` +
+    `<div style="min-width:0;text-align:left"><h3>${profile.name}, ${profile.age}</h3>` +
     `<p class="tiny" style="margin-top:3px">` +
     (profile.tier
       ? `${profile.votes} оценок · ${profile.tier}`
       : `${profile.votes} из 3 оценок до результата`) +
     `</p></div>` +
     `<span class="pr-status-value">${profile.tier ? profile.average : "—"}</span>` +
-    `</div>` +
+    `<svg class="pr-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>` +
+    `</button>` +
+    `<div class="pr-mine-body hidden" id="pr-mine-body">` +
+    `<div class="pr-mine-photo"><img id="pr-mine-img" alt=""></div>` +
     `<div class="pr-mine-actions">` +
     `<button class="btn btn-glass" id="pr-edit">Изменить</button>` +
     `<button class="btn btn-glass danger" id="pr-drop">Удалить</button>` +
-    `</div>`;
+    `</div></div>`;
 
-  // Показываем ровно то фото, которое видят другие
-  setPhoto($("pr-mine-img"), `/api/peer/photo/${state.userId}?v=${Date.now()}`);
+  $("pr-open").addEventListener("click", () => {
+    haptic();
+    const body = $("pr-mine-body");
+    const opening = body.classList.contains("hidden");
+    body.classList.toggle("hidden", !opening);
+    $("pr-open").classList.toggle("open", opening);
+    // Фото качаем только когда его действительно открыли
+    if (opening) setPhoto($("pr-mine-img"), `/api/peer/photo/me?v=${Date.now()}`);
+  });
 
   $("pr-edit").addEventListener("click", () => {
     haptic();

@@ -1970,3 +1970,28 @@ h3 {
   object-fit: cover;
   display: block;
 }
+
+
+/* Своя анкета: свёрнута, разворачивается по нажатию */
+.pr-toggle {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pr-chev {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-left: 10px;
+  color: var(--ink-3);
+  transition: transform 0.32s var(--ease);
+}
+
+.pr-toggle.open .pr-chev { transform: rotate(180deg); }
+
+.pr-mine-body { margin-top: 12px; }
