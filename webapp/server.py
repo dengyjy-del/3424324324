@@ -89,6 +89,15 @@ def _filler_identity(key: str, name: str | None, age: int | None):
     return parsed if parsed else peer.filler_identity(key)
 
 
+THEME_FALLBACK = {"mocha": "neon"}
+
+
+def _theme_or_default(stored: str | None) -> str:
+    if not stored:
+        return "classic"
+    return THEME_FALLBACK.get(stored, stored)
+
+
 def seed_files() -> list[str]:
     """Снимки из папки репозитория. Пустой список — не ошибка, а вариант."""
     folder = _seed_dir()
@@ -281,8 +290,11 @@ def create_app(
             "bot_username": await configured_bot_name(user.bot_id),
             "is_admin": config.is_admin(user.id),
             "peer_available": await _peer_enabled(user.id),
+            "user_id": user.id,
             "legal": {"terms": config.terms_url, "privacy": config.privacy_url},
-            "theme": await db.get_theme(user.id) or "classic",
+            # Мокко убрали: у выбравших её подставляем зелёную, иначе
+            # приложение осталось бы без палитры и упало на классику молча
+            "theme": _theme_or_default(await db.get_theme(user.id)),
             "model_version": rating.MODEL_VERSION,
             "stats": _stats_payload(stats),
             "subscribed": await _is_subscribed(user.id),
@@ -293,7 +305,7 @@ def create_app(
             },
         }
 
-    THEMES = ("classic", "graphite", "mocha", "sapphire")
+    THEMES = ("classic", "graphite", "neon", "rose", "sapphire")
 
     @app.post("/api/theme")
     async def set_theme(

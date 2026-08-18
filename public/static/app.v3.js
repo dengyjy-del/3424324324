@@ -20,6 +20,7 @@ const state = {
   lastScan: null,
   theme: "classic",
   legal: {},
+  userId: 0,
   cardTheme: 0,
   refCode: "",
 };
@@ -1160,7 +1161,8 @@ function initLabeling() {
 const THEMES = [
   { id: "classic", name: "Классика", colors: ["#5b4bff", "#ff3d71", "#00e0c6"], bg: "#07080d" },
   { id: "graphite", name: "Графит", colors: ["#6e7480", "#9aa1ad", "#d8dce3"], bg: "#0a0a0c" },
-  { id: "mocha", name: "Мокко", colors: ["#6b5442", "#a87f5e", "#57d6b0"], bg: "#100c0a" },
+  { id: "neon", name: "Неон", colors: ["#00b8a9", "#00e57a", "#7bff3d"], bg: "#050607" },
+  { id: "rose", name: "Розовая", colors: ["#a855f7", "#ff2d92", "#ffa4d8"], bg: "#0d040c" },
   { id: "sapphire", name: "Сапфир", colors: ["#2563eb", "#0ea5e9", "#7dd3fc"], bg: "#05080f" },
 ];
 
@@ -1319,6 +1321,7 @@ async function loadPeer() {
   $("pr-mine").classList.remove("hidden");
   $("pr-mine").className = "glass pad";
   $("pr-mine").innerHTML =
+    `<div class="pr-mine-photo"><img id="pr-mine-img" alt=""></div>` +
     `<div class="pr-status">` +
     `<div style="min-width:0"><h3>${profile.name}, ${profile.age}</h3>` +
     `<p class="tiny" style="margin-top:3px">` +
@@ -1332,6 +1335,9 @@ async function loadPeer() {
     `<button class="btn btn-glass" id="pr-edit">Изменить</button>` +
     `<button class="btn btn-glass danger" id="pr-drop">Удалить</button>` +
     `</div>`;
+
+  // Показываем ровно то фото, которое видят другие
+  setPhoto($("pr-mine-img"), `/api/peer/photo/${state.userId}?v=${Date.now()}`);
 
   $("pr-edit").addEventListener("click", () => {
     haptic();
@@ -1976,6 +1982,7 @@ async function boot() {
     state.channel = session.channel || state.channel;
     state.brand = session.brand || state.brand;
     state.legal = session.legal || {};
+    state.userId = session.user_id || 0;
     safePaint(() =>
       paintLegal("pf-legal", state.legal, "Пользуясь приложением, ты принимаешь")
     );

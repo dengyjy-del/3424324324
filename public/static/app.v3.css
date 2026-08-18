@@ -1520,16 +1520,32 @@ h3 {
   --ink-3: rgba(244, 245, 247, 0.32);
 }
 
-/* Мокко — тёплый тёмный шоколад с мятой. Единственная тёплая база. */
-[data-theme="mocha"] {
-  --void: #100c0a;
-  --void-2: #1a1512;
-  --aura-indigo: #6b5442;
-  --aura-rose: #a87f5e;
-  --aura-mint: #57d6b0;
-  --ink: #f6f1ec;
-  --ink-2: rgba(246, 241, 236, 0.58);
-  --ink-3: rgba(246, 241, 236, 0.34);
+/* Неон — электрическая зелень на нейтральном чёрном.
+
+   База намеренно без зелёного подтона: на тёмно-зелёном фоне лаймовые
+   ауры смешивались в болотный оттенок. Нейтральный чёрный оставляет
+   акценты чистыми. */
+[data-theme="neon"] {
+  --void: #050607;
+  --void-2: #0c1114;
+  --aura-indigo: #00b8a9;
+  --aura-rose: #00e57a;
+  --aura-mint: #7bff3d;
+  --ink: #f0fff7;
+  --ink-2: rgba(240, 255, 247, 0.6);
+  --ink-3: rgba(240, 255, 247, 0.35);
+}
+
+/* Розовая — маджента с сиреневым на глубоком сливовом */
+[data-theme="rose"] {
+  --void: #0d040c;
+  --void-2: #1a0a1a;
+  --aura-indigo: #a855f7;
+  --aura-rose: #ff2d92;
+  --aura-mint: #ffa4d8;
+  --ink: #fdf0f8;
+  --ink-2: rgba(253, 240, 248, 0.6);
+  --ink-3: rgba(253, 240, 248, 0.35);
 }
 
 /* Сапфир — холодная глубина, ближе всего к ночному небу. */
@@ -1936,3 +1952,21 @@ h3 {
 }
 
 .legal-links a:active { color: var(--ink); }
+
+
+/* Превью своей анкеты: то же фото, что видят другие */
+.pr-mine-photo {
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: var(--void-2);
+  margin-bottom: 12px;
+}
+
+.pr-mine-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

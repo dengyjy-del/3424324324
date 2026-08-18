@@ -1567,15 +1567,29 @@ async def cb_ref_enter(callback: CallbackQuery, db: Database) -> None:
 
 
 async def _show_peer_menu(message: Message, db: Database, config: Config, user_id: int) -> None:
-    """Экран режима. Одна точка, чтобы кнопки возврата вели в одно место."""
+    """
+    Экран режима. Одна точка, чтобы кнопки возврата вели в одно место.
+
+    Своя анкета показывается вместе с фотографией: человек должен видеть
+    ровно то, что видят другие, — иначе он не знает, что менять.
+    """
     state = await _peer_state_for(db, user_id)
     profile = state.get("profile")
     ready = bool(profile and profile.get("status") == "active")
+    markup = keyboards.peer_menu(config.webapp_url, has_profile=ready)
+    caption = texts.peer_intro(state)
 
-    await message.answer(
-        texts.peer_intro(state),
-        reply_markup=keyboards.peer_menu(config.webapp_url, has_profile=ready),
-    )
+    if ready:
+        photo = await db.peer_photo(user_id)
+        if photo:
+            await message.answer_photo(
+                BufferedInputFile(photo, filename="me.jpg"),
+                caption=caption,
+                reply_markup=markup,
+            )
+            return
+
+    await message.answer(caption, reply_markup=markup)
 
 
 @router.callback_query(F.data == "peer")
